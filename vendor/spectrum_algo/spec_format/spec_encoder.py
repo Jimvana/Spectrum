@@ -56,6 +56,7 @@ from tokenizers.ts_tokenizer import tokenise_ts
 from tokenizers.sql_tokenizer import tokenise_sql
 from tokenizers.rust_tokenizer import tokenise_rust
 from tokenizers.php_tokenizer import tokenise_php
+from tokenizers.java_tokenizer import tokenise_java
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -71,6 +72,7 @@ LANGUAGE_SQL    = 6
 LANGUAGE_RUST   = 7
 LANGUAGE_PHP    = 8
 LANGUAGE_XML    = 9
+LANGUAGE_JAVA   = 10
 
 FLAG_RLE = 0b0000_0001
 
@@ -92,6 +94,7 @@ _EXT_TO_LANG = {
     ".php":  LANGUAGE_PHP,
     ".phtml":LANGUAGE_PHP,
     ".xml":  LANGUAGE_XML,
+    ".java": LANGUAGE_JAVA,
 }
 
 _LANG_NAMES = {
@@ -105,6 +108,7 @@ _LANG_NAMES = {
     LANGUAGE_RUST:   "Rust",
     LANGUAGE_PHP:    "PHP",
     LANGUAGE_XML:    "XML/Wiki",
+    LANGUAGE_JAVA:   "Java",
 }
 
 
@@ -283,6 +287,8 @@ def encode_file(source_path: str, output_path: str,
         tokens = tokenise_php(source)
     elif language_id == LANGUAGE_XML:
         tokens = tokenize_wiki_source(source)
+    elif language_id == LANGUAGE_JAVA:
+        tokens = tokenise_java(source)
     else:
         tokens = tokenise_source(source)
 
@@ -378,6 +384,7 @@ def main():
         "rs":   LANGUAGE_RUST,
         "php":  LANGUAGE_PHP,
         "xml":  LANGUAGE_XML,
+        "java": LANGUAGE_JAVA,
     }
     lang_id  = lang_map[args.lang] if args.lang else LANGUAGE_PYTHON
 

@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve()
 root_candidates = []
 if "SPECTRUM_REPO_ROOT" in __import__("os").environ:
     root_candidates.append(Path(__import__("os").environ["SPECTRUM_REPO_ROOT"]).expanduser())
-root_candidates.extend([Path.cwd(), *Path.cwd().parents, DEFAULT_REPO_ROOT, VENDORED_REPO_ROOT])
+root_candidates.extend([VENDORED_REPO_ROOT, DEFAULT_REPO_ROOT, Path.cwd(), *Path.cwd().parents])
 for parent in root_candidates:
     if (parent / "spec_format" / "spec_encoder.py").exists() and (parent / "dictionary.py").exists():
         REPO_ROOT = parent

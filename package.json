@@ -12,7 +12,9 @@
     "vendor",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "!**/__pycache__/**",
+    "!**/*.pyc"
   ],
   "scripts": {
     "test": "node --test",

@@ -21,7 +21,6 @@ import sys
 import os
 import struct
 from pathlib import Path
-from PIL import Image
 
 # Allow imports from parent directory (where dictionary.py lives)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -137,6 +136,14 @@ def decode_file(image_path: str, output_path: str) -> dict:
         raise FileNotFoundError(f"Image not found: {image_path}")
 
     # Load image
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Pillow is required only for legacy Spectrum PNG input. "
+            "Install it with `python -m pip install Pillow`."
+        ) from exc
+
     img = Image.open(str(image_path)).convert("RGB")
     width, height = img.size
     all_pixels = list(img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata())

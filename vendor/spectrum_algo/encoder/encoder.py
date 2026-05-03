@@ -19,13 +19,14 @@ Usage:
     python encoder.py <source_file> [--width 64] [--out output.png]
 """
 
+from __future__ import annotations
+
 import sys
 import os
 import tokenize
 import io
 import struct
 from pathlib import Path
-from PIL import Image
 
 # Allow imports from parent directory (where dictionary.py lives)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -230,6 +231,14 @@ def pixels_to_image(data_pixels: list[tuple[int, int, int]],
     Rows: [header_row] + [data rows...]
     Data rows are padded with __PAD__ pixels to fill the last row.
     """
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Pillow is required only for legacy Spectrum PNG output. "
+            "Install it with `python -m pip install Pillow`."
+        ) from exc
+
     pad_pixel = D.SPECIAL["__PAD__"]
 
     # Pad data to a full number of rows
