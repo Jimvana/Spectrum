@@ -81,6 +81,31 @@ spec benchmark ./project --clean -o ./spec-benchmark
 
 The benchmark writes `report.md`, `report.json`, `queries.json`, and a raw BM25 baseline store.
 
+## SPB2 Postings
+
+Benchmark stores support a compressed Spectrum BM25 postings sidecar:
+
+- `postings.bin` uses the original SPB1 fixed-width postings format.
+- `postings_v2.bin` uses SPB2 varint/delta-encoded doc ID gaps plus varint term frequencies.
+- Loaders prefer `postings_v2.bin` when it exists and fall back to `postings.bin`.
+
+On the 25k generated-text benchmark store, SPB2 reduced the postings file from
+62,550,276 bytes to 15,759,020 bytes. The effective Spectrum store dropped from
+132,005,046 bytes to 85,213,790 bytes while preserving exact top-5 rankings and
+BM25 scores against SPB1.
+
+Convert an existing store:
+
+```bash
+python tools/convert_spectrum_postings_v2.py --store "path/to/spectrum_spec"
+```
+
+Compare SPB1 and SPB2:
+
+```bash
+python tools/benchmark_postings_formats.py --store "path/to/spectrum_spec"
+```
+
 ## Development
 
 ```bash
