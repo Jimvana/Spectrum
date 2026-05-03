@@ -1,0 +1,7 @@
+.github/
+tests/
+CONTRIBUTING.md
+SECURITY.md
+CODE_OF_CONDUCT.md
+*.specpack
+spec-benchmark/
