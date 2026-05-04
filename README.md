@@ -1,6 +1,6 @@
 # Spectrum CLI
 
-`spec` is the public command line interface for Spectrum `.spec` files and `.specpack` archives. It can encode source trees, decode them back to files, embed a searchable sparse retrieval index, and run a local benchmark against raw text plus BM25.
+`spec` is the public command line interface for Spectrum `.spec` files and `.specpack` archives. It can encode source trees, decode them back to files, embed a searchable sparse retrieval index, and run a local benchmark.
 
 The package currently ships as a small Node executable that launches the Python Spectrum engine vendored in this repository. Node is used for npm distribution; Python performs the codec, indexing, search, and benchmark work.
 
