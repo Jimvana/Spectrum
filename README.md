@@ -96,26 +96,26 @@ Spec can compress any text corpus, while keeping specific languages defined by t
 
 Right now in dictionary v12, Spectrum covers:
 
-Python
-HTML
-JavaScript
-CSS
-Plain text / Markdown
-TypeScript / TSX
-SQL
-Rust
-PHP
-XML / Wiki-style markup
-Java
-C
-C++
-Go
-C#
-Shell scripts
-JSON
-YAML
-TOML
-English word tokens
+Python,
+HTML,
+JavaScript,
+CSS,
+Plain text / Markdown,
+TypeScript / TSX,
+SQL,
+Rust,
+PHP,
+XML / Wiki-style markup,
+Java,
+C,
+C++,
+Go,
+C#,
+Shell scripts,
+JSON,
+YAML,
+TOML,
+English word tokens,
 
 ## Repository Layout
 
