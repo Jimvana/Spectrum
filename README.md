@@ -7,7 +7,8 @@ The package currently ships as a small Node executable that launches the Python 
 ## Install
 
 ```bash
-npm install -g @jimvana/spectrum
+cd \Spectrum
+npm install -g .
 spec --help
 ```
 
