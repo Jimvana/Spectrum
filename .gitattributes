@@ -1,0 +1,15 @@
+* text=auto
+
+*.bin binary
+*.pdf binary
+*.pptx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.bz2 binary
+*.zim binary
+*.spec binary
+*.specpack binary

@@ -1,0 +1,31 @@
+{
+  "target": "/Users/video/Desktop/babel-main.specpack",
+  "files": 18267,
+  "queries": 80,
+  "raw_bytes": 23110016,
+  "raw": {
+    "bytes": 36734161,
+    "ratio_vs_raw": 1.5895342088902058,
+    "payload_bytes": 27100427,
+    "index_bytes": 9633734,
+    "build_sec": 20.848995874999673,
+    "hit_at_1": 0.15,
+    "mrr": 0.31333333333333335,
+    "recall_at_5": 0.525,
+    "avg_query_ms": 12.697593737675561,
+    "p95_query_ms": 16.920457997912308
+  },
+  "spectrum": {
+    "bytes": 15782429,
+    "ratio_vs_raw": 0.6829259226821824,
+    "payload_bytes": 9174317,
+    "index_bytes": 9379784,
+    "build_sec": 50.31443908300207,
+    "verified": true,
+    "hit_at_1": 0.2875,
+    "mrr": 0.38624999999999987,
+    "recall_at_5": 0.55,
+    "avg_query_ms": 16.81642234998435,
+    "p95_query_ms": 23.629666000488214
+  }
+}

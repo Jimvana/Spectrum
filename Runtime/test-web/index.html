@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spectrum Runtime — Test</title>
+
+  <!--
+    styles.css does NOT exist on disk — only styles.css.spec.
+    It is loaded dynamically after the SW is active (see script below).
+  -->
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body   { font-family: monospace; background: #1e1e2e; color: #cdd6f4; padding: 2rem; line-height: 1.6; }
+    h1     { color: #cba6f7; font-size: 1.6rem; margin-bottom: 0.4rem; }
+    h2     { color: #89dceb; font-size: 1rem; text-transform: uppercase; letter-spacing: .05em; margin: 1.2rem 0 0.5rem; }
+    #status { padding: 0.6rem 1rem; background: #313244; border-radius: 6px; margin: 0.8rem 0; font-weight: 600; }
+    #log   { list-style: none; background: #181825; border-radius: 6px; padding: 0.8rem 1.2rem; font-size: 0.88rem; }
+    #log li { padding: 0.2rem 0; border-bottom: 1px solid #313244; }
+    #log li:last-child { border-bottom: none; }
+    .ok    { color: #a6e3a1; }
+    .err   { color: #f38ba8; }
+    .info  { color: #89dceb; }
+    .warn  { color: #f9e2af; }
+    #style-check { background: #1e1e2e; width: 1px; height: 1px; position: absolute; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <h1>Spectrum Algo — Runtime Test</h1>
+  <p style="color:#6c7086;font-size:.9rem;margin-bottom:1rem">Service Worker transparent .spec decode</p>
+
+  <div id="status">Registering Service Worker …</div>
+
+  <h2>Diagnostics</h2>
+  <ul id="log"><li class="info">Waiting …</li></ul>
+
+  <div id="style-check"></div>
+
+  <script>
+    // ── Globals ──────────────────────────────────────────────────────────────
+    const statusEl = document.getElementById('status');
+    const logEl    = document.getElementById('log');
+
+    function log(msg, cls = 'info') {
+      const li = document.createElement('li');
+      li.textContent = msg;
+      li.className = cls;
+      logEl.appendChild(li);
+      console.log('[spectrum-test]', msg);
+    }
+
+    function clearLog() { logEl.innerHTML = ''; }
+
+    // ── Catch any uncaught JS errors (e.g. from app.js at runtime) ───────────
+    window.onerror = function(msg, src, line, col, err) {
+      log(`window.onerror — ${msg} (${src?.split('/').pop()}:${line})`, 'err');
+      return false;
+    };
+
+    window.addEventListener('unhandledrejection', e => {
+      log(`Unhandled promise rejection — ${e.reason}`, 'err');
+    });
+
+    // ── Service Worker setup ─────────────────────────────────────────────────
+    if (!('serviceWorker' in navigator)) {
+      statusEl.textContent = 'Service Workers not supported.';
+      log('Service Workers not supported in this browser', 'err');
+    } else {
+      navigator.serviceWorker.register('../spectrum-sw.js', {
+        type:  'module',
+        scope: '/',
+      })
+      .then(reg => {
+        const state = reg.installing
+          ? 'installing' : reg.waiting
+          ? 'waiting'    : reg.active
+          ? 'active'     : 'unknown';
+        log(`SW registered — scope: ${reg.scope} — state: ${state}`, 'ok');
+        statusEl.textContent = 'SW registered — waiting for activation …';
+
+        function onSWReady() {
+          log('SW is controlling this page', 'ok');
+          statusEl.textContent = 'SW active — running diagnostics …';
+          clearLog();
+          runDiagnostics();
+        }
+
+        if (navigator.serviceWorker.controller) {
+          onSWReady();
+        } else {
+          navigator.serviceWorker.addEventListener('controllerchange', onSWReady, { once: true });
+
+          // If the SW is already active but not controlling, the page was most
+          // likely loaded via a hard reload (Ctrl+Shift+R). Chrome spec: a page
+          // loaded with "bypass SW" has its "allow service workers" flag unset,
+          // so clients.claim() cannot reclaim it — controllerchange never fires.
+          // Fix: do a normal reload. The SW will control the new page load.
+          // A sessionStorage flag prevents an infinite reload loop.
+          const sw = reg.active || reg.waiting || reg.installing;
+          if (sw && !reg.installing) {
+            if (!sessionStorage.getItem('spectrum-reloaded')) {
+              sessionStorage.setItem('spectrum-reloaded', '1');
+              log('SW active but not controlling (likely hard-reload bypass) — reloading …', 'warn');
+              statusEl.textContent = 'Reloading so SW can take control …';
+              setTimeout(() => window.location.reload(), 800); // brief pause so user sees the message
+            } else {
+              // Already reloaded once — something else is wrong
+              sessionStorage.removeItem('spectrum-reloaded');
+              log('SW still not in control after reload — check DevTools → Application → Service Workers', 'err');
+            }
+          }
+
+          // Safety timeout (in case reload doesn't help)
+          setTimeout(() => {
+            if (!navigator.serviceWorker.controller) {
+              log('Timeout: SW still not in control after 10s', 'err');
+            }
+          }, 10000);
+        }
+      })
+      .catch(err => {
+        statusEl.textContent = 'SW registration FAILED';
+        log('SW registration failed: ' + err.message, 'err');
+      });
+    }
+
+    // ── Diagnostics ──────────────────────────────────────────────────────────
+    async function runDiagnostics() {
+
+      // ── Test 1: Direct fetch probe for app.js ──────────────────────────
+      log('Probing app.js via fetch() …', 'info');
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 15000);
+        const r = await fetch('app.js', { signal: controller.signal });
+        clearTimeout(tid);
+        const decoded = r.headers.get('X-Spectrum-Decoded');
+        const tokens  = r.headers.get('X-Spectrum-Tokens');
+        const ct      = r.headers.get('Content-Type');
+
+        if (r.ok && decoded === 'true') {
+          log(`fetch('app.js') → ${r.status}  CT: ${ct}  tokens: ${tokens} ✓`, 'ok');
+        } else if (r.ok) {
+          log(`fetch('app.js') → ${r.status}  CT: ${ct}  (NOT decoded by SW)`, 'warn');
+        } else {
+          const body = await r.text();
+          log(`fetch('app.js') → ${r.status}  ${body.slice(0,120)}`, 'err');
+        }
+      } catch (e) {
+        log(`fetch('app.js') threw: ${e.message}`, 'err');
+      }
+
+      // ── Test 2: Direct fetch probe for styles.css ──────────────────────
+      log('Probing styles.css via fetch() …', 'info');
+      try {
+        const controller2 = new AbortController();
+        const tid2 = setTimeout(() => controller2.abort(), 15000);
+        const r = await fetch('styles.css', { signal: controller2.signal });
+        clearTimeout(tid2);
+        const decoded = r.headers.get('X-Spectrum-Decoded');
+        const ct      = r.headers.get('Content-Type');
+
+        if (r.ok && decoded === 'true') {
+          log(`fetch('styles.css') → ${r.status}  CT: ${ct} ✓`, 'ok');
+        } else if (r.ok) {
+          log(`fetch('styles.css') → ${r.status}  CT: ${ct}  (NOT decoded by SW)`, 'warn');
+        } else {
+          const body = await r.text();
+          log(`fetch('styles.css') → ${r.status}  ${body.slice(0,120)}`, 'err');
+        }
+      } catch (e) {
+        log(`fetch('styles.css') threw: ${e.message}`, 'err');
+      }
+
+      // ── Test 3: Load styles.css as a real stylesheet ───────────────────
+      log('Appending <link rel=stylesheet href=styles.css> …', 'info');
+      await new Promise(resolve => {
+        const link    = document.createElement('link');
+        link.rel      = 'stylesheet';
+        link.href     = 'styles.css';
+        link.onload   = () => { log('<link> styles.css onload ✓', 'ok');  resolve(); };
+        link.onerror  = () => { log('<link> styles.css onerror ✗', 'err'); resolve(); };
+        document.head.appendChild(link);
+        setTimeout(resolve, 5000); // don't hang forever
+      });
+
+      // ── Test 4: Load app.js as a real script ───────────────────────────
+      log('Appending <script src=app.js> …', 'info');
+      await new Promise(resolve => {
+        const script    = document.createElement('script');
+        script.src      = 'app.js';
+        script.onerror  = () => { log('<script> app.js onerror ✗', 'err'); resolve(); };
+        // app.js sets status to green on success — we watch for that
+        const check = setInterval(() => {
+          if (statusEl.style.color === 'rgb(76, 175, 80)') {
+            clearInterval(check);
+            resolve();
+          }
+        }, 100);
+        document.body.appendChild(script);
+        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+      });
+
+      statusEl.textContent = 'Diagnostics complete — see log above';
+    }
+  </script>
+
+</body>
+</html>

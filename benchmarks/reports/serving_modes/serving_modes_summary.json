@@ -1,0 +1,734 @@
+{
+  "rows": [
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "e2e": 0.2518,
+      "search": 0.2509,
+      "hydrate": 0.001,
+      "bytes": 47789.75,
+      "recall": 0.6,
+      "mrr": 0.3592
+    },
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "e2e": 0.026,
+      "search": 0.0254,
+      "hydrate": 0.0006,
+      "bytes": 76878.13,
+      "recall": 0.85,
+      "mrr": 0.5272
+    },
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "e2e": 153.9277,
+      "search": 0.1544,
+      "hydrate": 153.7734,
+      "bytes": 74341.38,
+      "recall": 0.4667,
+      "mrr": 0.2667
+    },
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "e2e": 28.595,
+      "search": 0.1053,
+      "hydrate": 28.4897,
+      "bytes": 74341.38,
+      "recall": 0.4667,
+      "mrr": 0.2667
+    },
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "e2e": 0.0577,
+      "search": 0.0571,
+      "hydrate": 0.0006,
+      "bytes": 2729.02,
+      "recall": 0.4667,
+      "mrr": 0.2667
+    },
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "e2e": 1.0649,
+      "search": 1.0626,
+      "hydrate": 0.0023,
+      "bytes": 48091.47,
+      "recall": 0.6,
+      "mrr": 0.3592
+    },
+    {
+      "mode": "full",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "e2e": 2.5828,
+      "search": 2.5786,
+      "hydrate": 0.0041,
+      "bytes": 48018.77,
+      "recall": 0.6,
+      "mrr": 0.3592
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "e2e": 0.2653,
+      "search": 0.2644,
+      "hydrate": 0.001,
+      "bytes": 26667.39,
+      "recall": 0.525,
+      "mrr": 0.3257
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "e2e": 0.0471,
+      "search": 0.0466,
+      "hydrate": 0.0006,
+      "bytes": 53210.87,
+      "recall": 0.8667,
+      "mrr": 0.6075
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "e2e": 131.6046,
+      "search": 0.1609,
+      "hydrate": 131.4437,
+      "bytes": 34050.57,
+      "recall": 0.425,
+      "mrr": 0.2521
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "e2e": 21.3696,
+      "search": 0.1003,
+      "hydrate": 21.2692,
+      "bytes": 34050.57,
+      "recall": 0.425,
+      "mrr": 0.2521
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "e2e": 0.0712,
+      "search": 0.0704,
+      "hydrate": 0.0008,
+      "bytes": 2591.84,
+      "recall": 0.425,
+      "mrr": 0.2521
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "e2e": 2.2246,
+      "search": 2.2206,
+      "hydrate": 0.004,
+      "bytes": 26761.4,
+      "recall": 0.525,
+      "mrr": 0.3257
+    },
+    {
+      "mode": "full",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "e2e": 2.4769,
+      "search": 2.4735,
+      "hydrate": 0.0034,
+      "bytes": 26743.78,
+      "recall": 0.525,
+      "mrr": 0.3257
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "e2e": 2.1026,
+      "search": 2.1006,
+      "hydrate": 0.002,
+      "bytes": 137696.29,
+      "recall": 0.5625,
+      "mrr": 0.3
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "e2e": 6.8775,
+      "search": 6.8752,
+      "hydrate": 0.0023,
+      "bytes": 126837.21,
+      "recall": 0.7625,
+      "mrr": 0.5877
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "e2e": 117.1304,
+      "search": 1.1001,
+      "hydrate": 116.0303,
+      "bytes": 95667.11,
+      "recall": 0.625,
+      "mrr": 0.469
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "e2e": 48.9373,
+      "search": 1.044,
+      "hydrate": 47.8932,
+      "bytes": 95667.11,
+      "recall": 0.625,
+      "mrr": 0.469
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "e2e": 0.9821,
+      "search": 0.9809,
+      "hydrate": 0.0012,
+      "bytes": 2397.95,
+      "recall": 0.625,
+      "mrr": 0.469
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "e2e": 8.9345,
+      "search": 8.9296,
+      "hydrate": 0.0049,
+      "bytes": 160424.56,
+      "recall": 0.5,
+      "mrr": 0.32
+    },
+    {
+      "mode": "full",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "e2e": 9.7432,
+      "search": 9.7392,
+      "hydrate": 0.0041,
+      "bytes": 159774.59,
+      "recall": 0.325,
+      "mrr": 0.196
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "e2e": 0.2507,
+      "search": 0.25,
+      "hydrate": 0.0007,
+      "bytes": 3861.4,
+      "recall": 0.6,
+      "mrr": 0.3592
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "e2e": 0.0251,
+      "search": 0.0246,
+      "hydrate": 0.0006,
+      "bytes": 11534.72,
+      "recall": 0.85,
+      "mrr": 0.5272
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "e2e": 31.6554,
+      "search": 0.169,
+      "hydrate": 31.4864,
+      "bytes": 17301.43,
+      "recall": 0.4667,
+      "mrr": 0.2667
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "e2e": 10.7262,
+      "search": 0.0958,
+      "hydrate": 10.6304,
+      "bytes": 17301.43,
+      "recall": 0.4667,
+      "mrr": 0.2667
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "e2e": 0.0684,
+      "search": 0.0678,
+      "hydrate": 0.0006,
+      "bytes": 553.27,
+      "recall": 0.4667,
+      "mrr": 0.2667
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "e2e": 1.3157,
+      "search": 1.3131,
+      "hydrate": 0.0025,
+      "bytes": 3861.4,
+      "recall": 0.6,
+      "mrr": 0.3592
+    },
+    {
+      "mode": "first",
+      "corpus": "self",
+      "docs": 80,
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "e2e": 2.4958,
+      "search": 2.4918,
+      "hydrate": 0.004,
+      "bytes": 3861.4,
+      "recall": 0.6,
+      "mrr": 0.3592
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "e2e": 0.2577,
+      "search": 0.2569,
+      "hydrate": 0.0007,
+      "bytes": 3868.22,
+      "recall": 0.525,
+      "mrr": 0.3257
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "e2e": 0.0496,
+      "search": 0.0491,
+      "hydrate": 0.0005,
+      "bytes": 8822.64,
+      "recall": 0.8667,
+      "mrr": 0.6075
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "e2e": 28.0327,
+      "search": 0.175,
+      "hydrate": 27.8576,
+      "bytes": 6403.03,
+      "recall": 0.425,
+      "mrr": 0.2521
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "e2e": 9.6797,
+      "search": 0.1033,
+      "hydrate": 9.5764,
+      "bytes": 6403.03,
+      "recall": 0.425,
+      "mrr": 0.2521
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "e2e": 0.0719,
+      "search": 0.0713,
+      "hydrate": 0.0006,
+      "bytes": 503.32,
+      "recall": 0.425,
+      "mrr": 0.2521
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "e2e": 2.335,
+      "search": 2.3319,
+      "hydrate": 0.0032,
+      "bytes": 3868.22,
+      "recall": 0.525,
+      "mrr": 0.3257
+    },
+    {
+      "mode": "first",
+      "corpus": "human",
+      "docs": 172,
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "e2e": 2.4593,
+      "search": 2.4563,
+      "hydrate": 0.003,
+      "bytes": 3868.22,
+      "recall": 0.525,
+      "mrr": 0.3257
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "e2e": 2.0632,
+      "search": 2.0618,
+      "hydrate": 0.0014,
+      "bytes": 21155.53,
+      "recall": 0.5625,
+      "mrr": 0.3
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "e2e": 6.8493,
+      "search": 6.8474,
+      "hydrate": 0.0019,
+      "bytes": 16838.95,
+      "recall": 0.7625,
+      "mrr": 0.5877
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "e2e": 32.5818,
+      "search": 1.0935,
+      "hydrate": 31.4883,
+      "bytes": 69775.51,
+      "recall": 0.625,
+      "mrr": 0.469
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "e2e": 14.3407,
+      "search": 1.0434,
+      "hydrate": 13.2973,
+      "bytes": 69775.51,
+      "recall": 0.625,
+      "mrr": 0.469
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "e2e": 0.9918,
+      "search": 0.991,
+      "hydrate": 0.0008,
+      "bytes": 489.61,
+      "recall": 0.625,
+      "mrr": 0.469
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "e2e": 8.9667,
+      "search": 8.9625,
+      "hydrate": 0.0042,
+      "bytes": 42842.2,
+      "recall": 0.5,
+      "mrr": 0.32
+    },
+    {
+      "mode": "first",
+      "corpus": "babel",
+      "docs": 18264,
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "e2e": 10.0519,
+      "search": 10.0479,
+      "hydrate": 0.0041,
+      "bytes": 42721.78,
+      "recall": 0.3375,
+      "mrr": 0.2085
+    }
+  ],
+  "agg": [
+    {
+      "mode": "full",
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "mean_e2e": 0.8732333333333333,
+      "mean_search": 0.8719666666666667,
+      "mean_hydrate": 0.0013333333333333333,
+      "values": [
+        0.2518,
+        0.2653,
+        2.1026
+      ]
+    },
+    {
+      "mode": "full",
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "mean_e2e": 2.316866666666667,
+      "mean_search": 2.3157333333333336,
+      "mean_hydrate": 0.0011666666666666665,
+      "values": [
+        0.026,
+        0.0471,
+        6.8775
+      ]
+    },
+    {
+      "mode": "full",
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "mean_e2e": 134.2209,
+      "mean_search": 0.4718,
+      "mean_hydrate": 133.74913333333333,
+      "values": [
+        153.9277,
+        131.6046,
+        117.1304
+      ]
+    },
+    {
+      "mode": "full",
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "mean_e2e": 32.9673,
+      "mean_search": 0.41653333333333337,
+      "mean_hydrate": 32.5507,
+      "values": [
+        28.595,
+        21.3696,
+        48.9373
+      ]
+    },
+    {
+      "mode": "full",
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "mean_e2e": 0.37033333333333335,
+      "mean_search": 0.36946666666666667,
+      "mean_hydrate": 0.0008666666666666666,
+      "values": [
+        0.0577,
+        0.0712,
+        0.9821
+      ]
+    },
+    {
+      "mode": "full",
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "mean_e2e": 4.074666666666666,
+      "mean_search": 4.0709333333333335,
+      "mean_hydrate": 0.0037333333333333333,
+      "values": [
+        1.0649,
+        2.2246,
+        8.9345
+      ]
+    },
+    {
+      "mode": "full",
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "mean_e2e": 4.9343,
+      "mean_search": 4.930433333333333,
+      "mean_hydrate": 0.0038666666666666667,
+      "values": [
+        2.5828,
+        2.4769,
+        9.7432
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "raw_tfidf_sklearn",
+      "label": "Raw TF-IDF",
+      "mean_e2e": 0.8572000000000001,
+      "mean_search": 0.8562333333333333,
+      "mean_hydrate": 0.0009333333333333333,
+      "values": [
+        0.2507,
+        0.2577,
+        2.0632
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "raw_bm25_python",
+      "label": "Raw BM25",
+      "mean_e2e": 2.3080000000000003,
+      "mean_search": 2.3070333333333335,
+      "mean_hydrate": 0.001,
+      "values": [
+        0.0251,
+        0.0496,
+        6.8493
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "spectrum_spb_bm25",
+      "label": "Spectrum full decode",
+      "mean_e2e": 30.756633333333333,
+      "mean_search": 0.47916666666666663,
+      "mean_hydrate": 30.277433333333335,
+      "values": [
+        31.6554,
+        28.0327,
+        32.5818
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "spectrum_spb_bm25_cached",
+      "label": "Spectrum cached decode",
+      "mean_e2e": 11.5822,
+      "mean_search": 0.4141666666666667,
+      "mean_hydrate": 11.168033333333334,
+      "values": [
+        10.7262,
+        9.6797,
+        14.3407
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "spectrum_snippet_sidecar",
+      "label": "Spectrum snippet sidecar",
+      "mean_e2e": 0.3773666666666667,
+      "mean_search": 0.3767,
+      "mean_hydrate": 0.0006666666666666666,
+      "values": [
+        0.0684,
+        0.0719,
+        0.9918
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "faiss_lsa_flat",
+      "label": "FAISS vector",
+      "mean_e2e": 4.2058,
+      "mean_search": 4.202500000000001,
+      "mean_hydrate": 0.0033,
+      "values": [
+        1.3157,
+        2.335,
+        8.9667
+      ]
+    },
+    {
+      "mode": "first",
+      "engine": "chroma_lsa",
+      "label": "Chroma vector DB",
+      "mean_e2e": 5.0023333333333335,
+      "mean_search": 4.998666666666667,
+      "mean_hydrate": 0.0037,
+      "values": [
+        2.4958,
+        2.4593,
+        10.0519
+      ]
+    }
+  ]
+}

@@ -1,0 +1,402 @@
+[
+  {
+    "query": "changelo preset env github changelog",
+    "expected_name": "CHANGELO-preset-env-v0-v1",
+    "expected_path": ".github/CHANGELO-preset-env-v0-v1.md"
+  },
+  {
+    "query": "changelog 6to5 github to5 internal",
+    "expected_name": "CHANGELOG-6to5",
+    "expected_path": ".github/CHANGELOG-6to5.md"
+  },
+  {
+    "query": "changelog github babel bug fix",
+    "expected_name": "CHANGELOG-v4",
+    "expected_path": ".github/CHANGELOG-v4.md"
+  },
+  {
+    "query": "changelog github babel internal republish",
+    "expected_name": "CHANGELOG-v5",
+    "expected_path": ".github/CHANGELOG-v5.md"
+  },
+  {
+    "query": "changelog github babel fixed small",
+    "expected_name": "CHANGELOG-v6",
+    "expected_path": ".github/CHANGELOG-v6.md"
+  },
+  {
+    "query": "changelog prereleases github tags boom",
+    "expected_name": "CHANGELOG-v7-prereleases",
+    "expected_path": ".github/CHANGELOG-v7-prereleases.md"
+  },
+  {
+    "query": "changelog github tags boom breaking",
+    "expected_name": "CHANGELOG-v7.0.0-v7.14.9",
+    "expected_path": ".github/CHANGELOG-v7.0.0-v7.14.9.md"
+  },
+  {
+    "query": "changelog github tags boom breaking",
+    "expected_name": "CHANGELOG-v7.15.0-v7.28.5",
+    "expected_path": ".github/CHANGELOG-v7.15.0-v7.28.5.md"
+  },
+  {
+    "query": "pull request template github before",
+    "expected_name": "PULL_REQUEST_TEMPLATE",
+    "expected_path": ".github/PULL_REQUEST_TEMPLATE.md"
+  },
+  {
+    "query": "plugin babel release tool yarn",
+    "expected_name": "plugin-babel-release-tool",
+    "expected_path": ".yarn/plugins/@yarnpkg/plugin-babel-release-tool.cjs"
+  },
+  {
+    "query": "plugin conditions yarn plugins yarnpkg",
+    "expected_name": "plugin-conditions",
+    "expected_path": ".yarn/plugins/@yarnpkg/plugin-conditions.cjs"
+  },
+  {
+    "query": "yarn releases cjs usr bin",
+    "expected_name": "yarn-4.14.1",
+    "expected_path": ".yarn/releases/yarn-4.14.1.cjs"
+  },
+  {
+    "query": "changelog tags boom breaking change",
+    "expected_name": "CHANGELOG",
+    "expected_path": "CHANGELOG.md"
+  },
+  {
+    "query": "code conduct contributor covenant our",
+    "expected_name": "CODE_OF_CONDUCT",
+    "expected_path": "CODE_OF_CONDUCT.md"
+  },
+  {
+    "query": "contributing align center class toc",
+    "expected_name": "CONTRIBUTING",
+    "expected_path": "CONTRIBUTING.md"
+  },
+  {
+    "query": "gulpfile import path from node",
+    "expected_name": "Gulpfile",
+    "expected_path": "Gulpfile.ts"
+  },
+  {
+    "query": "makefile source hash becc932164d47c98835c2967ee8680a74e49b6c3 eslint",
+    "expected_name": "Makefile",
+    "expected_path": "Makefile.js"
+  },
+  {
+    "query": "makefile source eslint disable typescript",
+    "expected_name": "Makefile.source",
+    "expected_path": "Makefile.source.ts"
+  },
+  {
+    "query": "readme align center href https",
+    "expected_name": "README",
+    "expected_path": "README.md"
+  },
+  {
+    "query": "security policy supported versions this",
+    "expected_name": "SECURITY",
+    "expected_path": "SECURITY.md"
+  },
+  {
+    "query": "song hallelujah praise babel audio",
+    "expected_name": "SONG",
+    "expected_path": "SONG.md"
+  },
+  {
+    "query": "babel worker import transformasync from",
+    "expected_name": "babel-worker",
+    "expected_path": "babel-worker.ts"
+  },
+  {
+    "query": "babel config import pathutils from",
+    "expected_name": "babel.config",
+    "expected_path": "babel.config.ts"
+  },
+  {
+    "query": "bench benchmark babel cli print",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-cli/print-usage/bench.mjs"
+  },
+  {
+    "query": "babel parser expression benchmark core",
+    "expected_name": "babel-parser-expression",
+    "expected_path": "benchmark/babel-core/real-case-preset-env-flow-ast/babel-parser-expression.mjs"
+  },
+  {
+    "query": "babel parser expression benchmark core",
+    "expected_name": "babel-parser-expression",
+    "expected_path": "benchmark/babel-core/real-case-preset-env-flow-ast/babel-parser-expression.txt"
+  },
+  {
+    "query": "babel parser tokenizer index benchmark",
+    "expected_name": "babel-parser-tokenizer-index",
+    "expected_path": "benchmark/babel-core/real-case-preset-env-typescript/babel-parser-tokenizer-index.mjs"
+  },
+  {
+    "query": "babel parser tokenizer index benchmark",
+    "expected_name": "babel-parser-tokenizer-index",
+    "expected_path": "benchmark/babel-core/real-case-preset-env-typescript/babel-parser-tokenizer-index.txt"
+  },
+  {
+    "query": "babel parser tokenizer index benchmark",
+    "expected_name": "babel-parser-tokenizer-index",
+    "expected_path": "benchmark/babel-core/real-case-ts-cjs/babel-parser-tokenizer-index.txt"
+  },
+  {
+    "query": "bench benchmark babel core real",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-core/real-case-ts-cjs/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel generator many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-generator/many-empty-statements/bench.mjs"
+  },
+  {
+    "query": "length benchmark babel generator many",
+    "expected_name": "1-length",
+    "expected_path": "benchmark/babel-generator/many-identifiers/1-length.mjs"
+  },
+  {
+    "query": "length benchmark babel generator many",
+    "expected_name": "25-length",
+    "expected_path": "benchmark/babel-generator/many-identifiers/25-length.mjs"
+  },
+  {
+    "query": "jquery benchmark babel generator real",
+    "expected_name": "jquery-3.6",
+    "expected_path": "benchmark/babel-generator/real-case/jquery-3.6.txt"
+  },
+  {
+    "query": "jquery benchmark babel generator real",
+    "expected_name": "jquery",
+    "expected_path": "benchmark/babel-generator/real-case/jquery.mjs"
+  },
+  {
+    "query": "gettargets benchmark babel helper compilation",
+    "expected_name": "getTargets",
+    "expected_path": "benchmark/babel-helper-compilation-targets/getTargets.mjs"
+  },
+  {
+    "query": "identifier bench benchmark babel helper",
+    "expected_name": "identifier.bench",
+    "expected_path": "benchmark/babel-helper-validator-identifier/identifier.bench.mjs"
+  },
+  {
+    "query": "isidentifierchar bench benchmark babel helper",
+    "expected_name": "isIdentifierChar.bench",
+    "expected_path": "benchmark/babel-helper-validator-identifier/isIdentifierChar.bench.mjs"
+  },
+  {
+    "query": "isidentifiername bench benchmark babel helper",
+    "expected_name": "isIdentifierName.bench",
+    "expected_path": "benchmark/babel-helper-validator-identifier/isIdentifierName.bench.mjs"
+  },
+  {
+    "query": "isidentifierstart bench benchmark babel helper",
+    "expected_name": "isIdentifierStart.bench",
+    "expected_path": "benchmark/babel-helper-validator-identifier/isIdentifierStart.bench.mjs"
+  },
+  {
+    "query": "iskeyword bench benchmark babel helper",
+    "expected_name": "isKeyword.bench",
+    "expected_path": "benchmark/babel-helper-validator-identifier/isKeyword.bench.mjs"
+  },
+  {
+    "query": "isstrictbindreservedword bench benchmark babel helper",
+    "expected_name": "isStrictBindReservedWord.bench",
+    "expected_path": "benchmark/babel-helper-validator-identifier/isStrictBindReservedWord.bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser large",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/large-regexp/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-arrow-function-flow-types/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-async-arrows/bench.mjs"
+  },
+  {
+    "query": "length bench benchmark babel parser",
+    "expected_name": "1-length.bench",
+    "expected_path": "benchmark/babel-parser/many-class-private-properties/1-length.bench.mjs"
+  },
+  {
+    "query": "attachcomment false bench benchmark babel",
+    "expected_name": "attachComment-false.bench",
+    "expected_path": "benchmark/babel-parser/many-empty-statements/attachComment-false.bench.mjs"
+  },
+  {
+    "query": "length bench benchmark babel parser",
+    "expected_name": "1-length.bench",
+    "expected_path": "benchmark/babel-parser/many-identifiers/1-length.bench.mjs"
+  },
+  {
+    "query": "length bench benchmark babel parser",
+    "expected_name": "11-length.bench",
+    "expected_path": "benchmark/babel-parser/many-identifiers/11-length.bench.mjs"
+  },
+  {
+    "query": "length bench benchmark babel parser",
+    "expected_name": "2-length.bench",
+    "expected_path": "benchmark/babel-parser/many-identifiers/2-length.bench.mjs"
+  },
+  {
+    "query": "await benchmark babel parser many",
+    "expected_name": "await",
+    "expected_path": "benchmark/babel-parser/many-identifiers/await.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-inner-comments/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-inner-comments-nested/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-leading-comments/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-leading-comments-nested/bench.mjs"
+  },
+  {
+    "query": "attachcomment false bench benchmark babel",
+    "expected_name": "attachComment-false.bench",
+    "expected_path": "benchmark/babel-parser/many-leading-trailing-comments/attachComment-false.bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-leading-trailing-comments/bench.mjs"
+  },
+  {
+    "query": "length binding benchmark babel parser",
+    "expected_name": "1-length-binding",
+    "expected_path": "benchmark/babel-parser/many-let-declarations/1-length-binding.mjs"
+  },
+  {
+    "query": "length binding benchmark babel parser",
+    "expected_name": "10-length-binding",
+    "expected_path": "benchmark/babel-parser/many-let-declarations-within-block/10-length-binding.mjs"
+  },
+  {
+    "query": "length bench benchmark babel parser",
+    "expected_name": "1-length.bench",
+    "expected_path": "benchmark/babel-parser/many-named-export/1-length.bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-nested-block-elements/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-nested-conditional-expressions/bench.mjs"
+  },
+  {
+    "query": "with typescript plugin benchmark babel",
+    "expected_name": "with-typescript-plugin",
+    "expected_path": "benchmark/babel-parser/many-nested-conditional-expressions/with-typescript-plugin.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-nested-jsx-elements-with-attributes/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-nested-template-elements/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-small-all-flags-regexp/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-template-elements/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-trailing-comments/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser many",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/many-trailing-comments-nested/bench.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser real",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/real-case/bench.mjs"
+  },
+  {
+    "query": "jquery benchmark babel parser real",
+    "expected_name": "jquery-3.6",
+    "expected_path": "benchmark/babel-parser/real-case/jquery-3.6.txt"
+  },
+  {
+    "query": "real case loc benchmark babel",
+    "expected_name": "real-case-no-loc",
+    "expected_path": "benchmark/babel-parser/real-case-no-loc.mjs"
+  },
+  {
+    "query": "bench benchmark babel parser real",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-parser/real-case-ts/bench.mjs"
+  },
+  {
+    "query": "parser benchmark babel real case",
+    "expected_name": "ts-parser",
+    "expected_path": "benchmark/babel-parser/real-case-ts/ts-parser.txt"
+  },
+  {
+    "query": "bench benchmark babel traverse enter",
+    "expected_name": "bench",
+    "expected_path": "benchmark/babel-traverse/enter-visitor-context-change/bench.mjs"
+  },
+  {
+    "query": "blockstatement benchmark babel types builders",
+    "expected_name": "blockStatement",
+    "expected_path": "benchmark/babel-types/builders/blockStatement.mjs"
+  },
+  {
+    "query": "memberexpression benchmark babel types builders",
+    "expected_name": "memberExpression",
+    "expected_path": "benchmark/babel-types/builders/memberExpression.mjs"
+  },
+  {
+    "query": "multiple benchmark babel types builders",
+    "expected_name": "multiple",
+    "expected_path": "benchmark/babel-types/builders/multiple.mjs"
+  },
+  {
+    "query": "stringliteral benchmark babel types builders",
+    "expected_name": "stringLiteral",
+    "expected_path": "benchmark/babel-types/builders/stringLiteral.mjs"
+  },
+  {
+    "query": "isexpression benchmark babel types validators",
+    "expected_name": "isExpression",
+    "expected_path": "benchmark/babel-types/validators/isExpression.mjs"
+  }
+]

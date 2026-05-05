@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spectrum Retrieval Lab</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>Spectrum Retrieval Lab</h1>
+          <p>Search a folder or .specpack against Spectrum, raw sparse retrieval, and vector retrieval.</p>
+        </div>
+        <div class="status" id="status">No corpus loaded</div>
+      </section>
+
+      <section class="controls">
+        <label class="field path-field">
+          <span>Corpus path</span>
+          <input id="pathInput" value="/Users/video/Desktop/Spectrum Algo/CLI Tool/coding-interview-university-main.specpack" />
+        </label>
+        <label class="check">
+          <input id="includeAllInput" type="checkbox" />
+          <span>Include all files</span>
+        </label>
+        <button id="loadBtn" type="button">Load</button>
+      </section>
+
+      <section class="metrics" id="summaryPanel" hidden>
+        <article>
+          <span>Files</span>
+          <strong id="filesMetric">0</strong>
+        </article>
+        <article>
+          <span>Raw text</span>
+          <strong id="rawBytesMetric">0 B</strong>
+        </article>
+        <article>
+          <span>Raw baseline store</span>
+          <strong id="rawStoreMetric">0 B</strong>
+        </article>
+        <article>
+          <span>Spectrum pack</span>
+          <strong id="specStoreMetric">0 B</strong>
+        </article>
+        <article>
+          <span>Embedding index</span>
+          <strong id="embeddingStoreMetric">Lazy</strong>
+        </article>
+      </section>
+
+      <section class="query-bar">
+        <label class="field">
+          <span>Search query</span>
+          <input id="queryInput" value="dynamic programming recurrence" />
+        </label>
+        <label class="field small">
+          <span>Top K</span>
+          <input id="topKInput" type="number" min="1" max="25" value="5" />
+        </label>
+        <button id="searchBtn" type="button">Search</button>
+      </section>
+      <p class="compare-note">
+        Result scores are local to each retriever. Compare rank, relevance, latency, and benchmark metrics rather than score magnitude across columns.
+      </p>
+
+      <section class="compare">
+        <div class="pane">
+          <header>
+            <div>
+              <h2>Spectrum .spec BM25</h2>
+              <p id="specLatency">-</p>
+            </div>
+          </header>
+          <div id="specResults" class="results empty">Load a corpus, then search.</div>
+        </div>
+        <div class="pane">
+          <header>
+            <div>
+              <h2 id="rawTitle">Raw Text Baseline</h2>
+              <p id="rawLatency">-</p>
+            </div>
+          </header>
+          <div id="rawResults" class="results empty">Load a corpus, then search.</div>
+        </div>
+        <div class="pane">
+          <header>
+            <div>
+              <h2>Embedding Vector Search</h2>
+              <p id="embeddingLatency">-</p>
+            </div>
+          </header>
+          <div id="embeddingResults" class="results empty">Load a corpus, then search.</div>
+        </div>
+      </section>
+
+      <section class="benchmark">
+        <div>
+          <h2>Benchmark</h2>
+          <p>Generated file/path queries compare Spectrum, raw sparse retrieval, and vector retrieval.</p>
+        </div>
+        <div class="bench-controls">
+          <label class="field small">
+            <span>Queries</span>
+            <input id="queriesInput" type="number" min="1" max="500" value="60" />
+          </label>
+          <button id="benchmarkBtn" type="button">Run Benchmark</button>
+        </div>
+      </section>
+
+      <section class="bench-output" id="benchOutput" hidden>
+        <div class="bench-grid">
+          <article>
+            <span>Raw Hit@1</span>
+            <strong id="rawHit">-</strong>
+          </article>
+          <article>
+            <span>Spectrum Hit@1</span>
+            <strong id="specHit">-</strong>
+          </article>
+          <article>
+            <span>Embedding Hit@1</span>
+            <strong id="embeddingHit">-</strong>
+          </article>
+          <article>
+            <span>Raw MRR</span>
+            <strong id="rawMrr">-</strong>
+          </article>
+          <article>
+            <span>Spectrum MRR</span>
+            <strong id="specMrr">-</strong>
+          </article>
+          <article>
+            <span>Embedding MRR</span>
+            <strong id="embeddingMrr">-</strong>
+          </article>
+          <article>
+            <span>Raw avg ms</span>
+            <strong id="rawAvg">-</strong>
+          </article>
+          <article>
+            <span>Spectrum avg ms</span>
+            <strong id="specAvg">-</strong>
+          </article>
+          <article>
+            <span>Embedding avg ms</span>
+            <strong id="embeddingAvg">-</strong>
+          </article>
+        </div>
+        <p class="backend" id="embeddingBackend">Embedding backend: -</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Query</th>
+                <th>Expected</th>
+                <th>Raw rank</th>
+                <th>Spectrum rank</th>
+                <th>Embedding rank</th>
+              </tr>
+            </thead>
+            <tbody id="benchRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

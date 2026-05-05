@@ -1,0 +1,16 @@
+[project]
+name = "spectrum-spec-mcp"
+version = "0.1.0"
+description = "MCP server for reading Spectrum Algo .spec and .specpack files."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.13.0",
+]
+
+[project.scripts]
+spectrum-spec-mcp = "spectrum_spec_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
