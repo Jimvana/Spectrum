@@ -101,6 +101,12 @@ Body:
 
 Unknown characters fall back to ASCII or Unicode marker IDs, so decoding remains lossless. The header stores dictionary version, language ID, source length, flags, and a checksum for verification.
 
+| Component | What it answers | Cost |
+|---|---|---|
+| Spectrum snippets | “What are the likely top results, and what preview text should I show?” | Very fast; tiny hydration cost because it reads short snippet sidecars instead of decoding full `.spec` payloads. |
+| Spectrum serving | “Give me previews, and when the user or agent chooses a result, give me the exact full source text.” | Slightly slower because it uses snippets for the result list, then decodes one selected full `.spec` payload on demand and caches it. |
+
+
 ## Repository Layout
 
 ```text
