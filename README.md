@@ -1,6 +1,6 @@
-# Spectrum Algo
+# Spectrum
 
-Spectrum Algo is an experimental semantic compression and retrieval-ready storage format for code and structured text.
+Spectrum is an experimental semantic compression and retrieval-ready storage format for code and structured text.
 
 The project converts source text into `.spec` files by mapping meaningful language tokens to stable integer IDs, run-length encoding repeated IDs, and compressing the resulting stream. Unlike a passive compressor, the stored representation keeps a searchable semantic-token layer: token IDs can be indexed directly, compared, and decoded back to the original source on demand.
 
