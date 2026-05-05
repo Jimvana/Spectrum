@@ -1,6 +1,9 @@
 # Spectrum
 
-Spectrum: a deterministic semantic encoding enabling constant-time retrieval primitives
+Spectrum is a deterministic semantic encoding for compact, lossless, searchable
+code and text stores. The CLI includes a bring-your-own-repo demo so you can
+benchmark Spectrum against a conventional raw-code retrieval store on your own
+machine.
 
 The project converts source text into `.spec` files by mapping meaningful language tokens to stable integer IDs, run-length encoding repeated IDs, and compressing the resulting stream. Unlike a passive compressor, the stored representation keeps a searchable semantic-token layer: token IDs can be indexed directly, compared, and decoded back to the original source on demand.
 
@@ -11,6 +14,39 @@ Most retrieval systems store raw chunks and build a separate search index beside
 > The compressed artifact and the retrieval representation can be the same thing.
 
 The current proof path is local, explainable, compressed retrieval for code and structured text. The project is not trying to beat gzip, Brotli, or zstd as a pure byte compressor. Those tools are storage baselines. Spectrum's claim is that `.spec` can be compact, lossless, searchable, and explainable at the same time.
+
+## Try The Demo
+
+Install or update the local CLI from this checkout:
+
+```powershell
+cd "CLI Tool"
+npm install -g . --force
+```
+
+Then run the guided demo:
+
+```powershell
+spectrum demo
+```
+
+For a repeatable third-party repo run:
+
+```powershell
+spectrum demo `
+  --repo https://github.com/vladmandic/human `
+  --max-files 0 `
+  --query "face detection pipeline" `
+  --query "model loading" `
+  --clean
+```
+
+The demo clones or scans a repository, builds a conventional raw-code TF-IDF
+store and a Spectrum `.spec` + SPB2 BM25 store, verifies byte-for-byte lossless
+decode fidelity, and writes Markdown, JSON, and HTML reports under `demo/runs/`.
+
+Use `spectrum` for the public CLI command. The older `spec` command remains
+available as a backwards-compatible alias.
 
 ## Current Status
 
