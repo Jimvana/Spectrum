@@ -16,6 +16,7 @@ payload path.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,52 @@ from pathlib import Path
 from rag.codebase_benchmark import decode_code_spec_bytes_fast
 from rag.normalization import retrieval_token_ids
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path
+
+_SNIPPET_TERM_RE = re.compile(r"[A-Za-z0-9_]{2,}")
+
+
+def _snippet_terms(query: str) -> list[str]:
+    terms = [term.lower() for term in _SNIPPET_TERM_RE.findall(query)]
+    return list(dict.fromkeys(term for term in terms if len(term) >= 2))
+
+
+def windowed_snippet(text: str, query: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+
+    lowered = text.lower()
+    positions = []
+    for term in _snippet_terms(query):
+        pos = lowered.find(term)
+        if pos >= 0:
+            positions.append(pos)
+    if positions:
+        start = max(0, min(positions) - limit // 3)
+    else:
+        start = 0
+
+    end = min(len(text), start + limit)
+    if end - start < limit:
+        start = max(0, end - limit)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    body_limit = max(0, limit - len(prefix) - len(suffix))
+    snippet = text[start:end].strip()[:body_limit].strip()
+    return prefix + snippet + suffix
+
+
+def title_token_index(documents: list[dict]) -> dict[int, list[int]]:
+    index: dict[int, list[int]] = {}
+    for doc in documents:
+        doc_id = int(doc["id"])
+        title = str(doc.get("title", ""))
+        source_path = str(doc.get("source_path", ""))
+        for token_id in set(retrieval_token_ids(f"{title} {source_path}")):
+            index.setdefault(token_id, []).append(doc_id)
+    return index
 
 
 @dataclass(frozen=True)
@@ -49,6 +96,9 @@ class SpectrumServingRetriever:
         self,
         spectrum_store_dir: Path,
         snippets_by_id: dict[int, str],
+        preload_specs: bool = True,
+        snippet_chars: int = 600,
+        title_boost: float = 0.5,
     ):
         self.spectrum_store_dir = Path(spectrum_store_dir)
         docs_meta = json.loads((self.spectrum_store_dir / "docs.json").read_text(encoding="utf-8"))
@@ -58,7 +108,16 @@ class SpectrumServingRetriever:
             int(doc["id"]): self.spectrum_store_dir / doc["path"]
             for doc in self.documents
         }
+        self.spec_bytes: dict[int, bytes] = {}
+        if preload_specs:
+            self.spec_bytes = {
+                doc_id: path.read_bytes()
+                for doc_id, path in self.spec_paths.items()
+            }
         self.snippets_by_id = snippets_by_id
+        self.snippet_chars = snippet_chars
+        self.title_boost = title_boost
+        self.title_index = title_token_index(self.documents) if title_boost else None
         self.bm25 = load_binary_postings(
             preferred_binary_postings_path(self.spectrum_store_dir),
             self.documents,
@@ -71,6 +130,8 @@ class SpectrumServingRetriever:
         benchmark_dir: Path,
         snippet_chars: int = 600,
         sidecar_path: Path | None = None,
+        preload_specs: bool = True,
+        title_boost: float = 0.5,
     ) -> "SpectrumServingRetriever":
         benchmark_dir = Path(benchmark_dir)
         snippets_by_id = cls.load_or_build_snippets(
@@ -78,7 +139,13 @@ class SpectrumServingRetriever:
             snippet_chars=snippet_chars,
             sidecar_path=sidecar_path,
         )
-        return cls(benchmark_dir / "spectrum_spec", snippets_by_id=snippets_by_id)
+        return cls(
+            benchmark_dir / "spectrum_spec",
+            snippets_by_id=snippets_by_id,
+            preload_specs=preload_specs,
+            snippet_chars=snippet_chars,
+            title_boost=title_boost,
+        )
 
     @staticmethod
     def load_or_build_snippets(
@@ -113,6 +180,8 @@ class SpectrumServingRetriever:
             retrieval_token_ids(query),
             top_k,
             max_df_ratio=0.9,
+            title_index=self.title_index,
+            title_boost=self.title_boost,
         )
         results = []
         for rank, doc_id in enumerate(doc_ids, start=1):
@@ -125,7 +194,11 @@ class SpectrumServingRetriever:
                     title=str(doc.get("title", "")),
                     source_path=str(doc.get("source_path", doc.get("title", ""))),
                     score_rank=rank,
-                    snippet=self.snippets_by_id.get(doc_id, ""),
+                    snippet=windowed_snippet(
+                        self.snippets_by_id.get(doc_id, ""),
+                        query,
+                        self.snippet_chars,
+                    ),
                 )
             )
         return results
@@ -137,7 +210,10 @@ class SpectrumServingRetriever:
         if cached:
             text = self.decoded_cache[doc_id]
         else:
-            text = decode_code_spec_bytes_fast(self.spec_paths[doc_id].read_bytes())
+            data = self.spec_bytes.get(doc_id)
+            if data is None:
+                data = self.spec_paths[doc_id].read_bytes()
+            text = decode_code_spec_bytes_fast(data)
             self.decoded_cache[doc_id] = text
         return SpectrumDecodedPayload(
             id=doc_id,

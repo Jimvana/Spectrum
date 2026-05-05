@@ -19,6 +19,7 @@ The current proof path is local, explainable, compressed retrieval for code and 
 - Encoders, decoders, migration tooling, and version snapshots are included.
 - Wikipedia/XML shard experiments verify large lossless corpora locally.
 - RAG storage benchmarks compare conventional raw text plus TF-IDF against `.spec` chunks plus a compact Spectrum BM25 index. Current loaders support SPB1 fixed-width postings and prefer SPB2 varint/delta postings when `postings_v2.bin` exists.
+- The standard Spectrum serving path now preloads `.spec` payload bytes into RAM, serves query-windowed snippet sidecars for result lists, and byte-prism decodes the selected full payload on demand.
 
 Current 120-page Wikipedia sample signal with 6k-character chunks:
 
@@ -59,6 +60,24 @@ The Java run covered 53,780 OpenJDK file-level chunks, including 52,532 Java
 files, and verified lossless decoding with zero fidelity failures. SPB2 reduced
 the previous OpenJDK Spectrum index by 61.94% while preserving the same
 generated-query rankings.
+
+Current Java production-serving signal on Apache Commons Lang:
+
+| Engine | E2E ms | P95 E2E ms | Hit@1 | MRR | Recall@5 | CPU E2E ms | Stored bytes |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Spectrum snippets | 0.461 | 0.784 | 0.447 | 0.567 | 0.750 | 0.383 | 2,945,660 |
+| Raw TF-IDF | 0.647 | 0.886 | 0.163 | 0.236 | 0.366 | 0.629 | n/a in production runner |
+| Raw BM25 | 1.576 | 2.348 | 0.284 | 0.392 | 0.569 | 1.478 | n/a in production runner |
+| Spectrum serving | 1.594 | 5.492 | 0.447 | 0.567 | 0.750 | 1.587 | 2,958,855 |
+| Dense LSA | 14.048 | 15.125 | 0.166 | 0.231 | 0.349 | 13.381 | 1,169,408 |
+| Hybrid Spectrum+LSA | 16.497 | 19.723 | 0.284 | 0.408 | 0.618 | 15.871 | 3,772,846 |
+
+The Java production run used 571 files/chunks from Apache Commons Lang and 571
+generated file/path queries. The storage builder reported 8,975,222 raw chunk
+bytes, 10,496,085 bytes for conventional raw+TF-IDF, and 2,603,438 bytes for
+Spectrum `.spec`+SPB2 BM25 before serving snippets. Optional FAISS, Chroma,
+OpenSearch, Zoekt, and Lucene/Pyserini adapters were skipped on this machine
+because their dependencies or services were not installed.
 
 ## The `.spec` Format
 
@@ -135,8 +154,8 @@ fidelity, and compare storage/retrieval/latency.
 For comparisons against production-style retrieval engines, use
 `rag/production_benchmark.py` against an existing codebase benchmark directory.
 The runner supports local TF-IDF, raw BM25, Spectrum BM25, byte-prism Spectrum
-decode, the standard `spectrum_serving` flow (top-k snippets plus cached
-on-demand full `.spec` decode), local dense LSA, hybrid reciprocal-rank fusion,
+decode, the standard `spectrum_serving` flow (query-windowed top-k snippets plus
+RAM-backed cached on-demand full `.spec` decode), local dense LSA, hybrid reciprocal-rank fusion,
 and dependency-gated adapters for FAISS, Chroma, OpenSearch, Zoekt, and
 Lucene/Pyserini. Generated stores now live under `benchmarks/generated/`, and
 tracked summaries live under `benchmarks/reports/`. See

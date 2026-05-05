@@ -27,7 +27,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from rag.ranking_eval import RawTextBM25, conventional_rank, raw_bm25_rank
-from rag.spectrum_serving import SpectrumServingRetriever
+from rag.spectrum_serving import SpectrumServingRetriever, title_token_index, windowed_snippet
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path, reset_dir
 from rag.codebase_benchmark import decode_code_spec_bytes, decode_code_spec_bytes_fast
 
@@ -144,18 +144,27 @@ def evaluate_engine(
     latencies = []
     end_to_end_latencies = []
     hydrate_latencies = []
+    cpu_latencies = []
+    cpu_search_latencies = []
+    cpu_hydrate_latencies = []
     hydrated_bytes = []
     for item in queries:
         relevant = set(int(doc_id) for doc_id in item.get("relevant_ids", []))
         started = time.perf_counter()
+        cpu_started = time.process_time()
         result_ids = engine.search(str(item["query"]), top_k)
         search_done = time.perf_counter()
+        cpu_search_done = time.process_time()
         ids_to_hydrate = result_ids if hydrate_limit is None else result_ids[:hydrate_limit]
         payloads = engine.hydrate(ids_to_hydrate)
         hydrate_done = time.perf_counter()
+        cpu_hydrate_done = time.process_time()
         latencies.append((search_done - started) * 1000)
         hydrate_latencies.append((hydrate_done - search_done) * 1000)
         end_to_end_latencies.append((hydrate_done - started) * 1000)
+        cpu_search_latencies.append((cpu_search_done - cpu_started) * 1000)
+        cpu_hydrate_latencies.append((cpu_hydrate_done - cpu_search_done) * 1000)
+        cpu_latencies.append((cpu_hydrate_done - cpu_started) * 1000)
         hydrated_bytes.append(sum(len(payload.encode("utf-8")) for payload in payloads))
         if result_ids and result_ids[0] in relevant:
             hit1 += 1
@@ -175,6 +184,15 @@ def evaluate_engine(
         "p95_hydrate_ms": round(percentile(hydrate_latencies, 95), 4),
         "avg_end_to_end_ms": round(mean(end_to_end_latencies) if end_to_end_latencies else 0.0, 4),
         "p95_end_to_end_ms": round(percentile(end_to_end_latencies, 95), 4),
+        "avg_cpu_query_ms": round(mean(cpu_search_latencies) if cpu_search_latencies else 0.0, 4),
+        "avg_cpu_hydrate_ms": round(mean(cpu_hydrate_latencies) if cpu_hydrate_latencies else 0.0, 4),
+        "avg_cpu_end_to_end_ms": round(mean(cpu_latencies) if cpu_latencies else 0.0, 4),
+        "cpu_utilization_pct": round(
+            (sum(cpu_latencies) / sum(end_to_end_latencies) * 100)
+            if end_to_end_latencies and sum(end_to_end_latencies)
+            else 0.0,
+            2,
+        ),
         "avg_hydrated_bytes": round(mean(hydrated_bytes) if hydrated_bytes else 0.0, 2),
         "hydrate_limit": hydrate_limit if hydrate_limit is not None else top_k,
     }
@@ -240,11 +258,15 @@ class SpectrumBM25Engine:
         name: str = "spectrum_spb_bm25",
         cache_hydration: bool = False,
         fast_decode: bool = False,
+        preload_specs: bool = True,
+        title_boost: float = 0.5,
     ):
         self.benchmark_dir = benchmark_dir
         self.name = name
         self.cache_hydration = cache_hydration
         self.fast_decode = fast_decode
+        self.preload_specs = preload_specs
+        self.title_boost = title_boost
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
         started = time.perf_counter()
@@ -257,6 +279,13 @@ class SpectrumBM25Engine:
             for doc in docs_meta["documents"]
         }
         self.hydration_cache: dict[int, str] = {}
+        self.title_index = title_token_index(docs_meta["documents"]) if self.title_boost else None
+        self.spec_bytes: dict[int, bytes] = {}
+        if self.preload_specs:
+            self.spec_bytes = {
+                doc_id: path.read_bytes()
+                for doc_id, path in self.spec_paths.items()
+            }
         self.bm25 = load_binary_postings(
             preferred_binary_postings_path(store_dir),
             docs_meta["documents"],
@@ -272,7 +301,14 @@ class SpectrumBM25Engine:
     def search(self, query: str, top_k: int) -> list[int]:
         from rag.normalization import retrieval_token_ids
 
-        return self.bm25.search(retrieval_token_ids(query), top_k, max_df_ratio=0.9)
+        self.last_query = query
+        return self.bm25.search(
+            retrieval_token_ids(query),
+            top_k,
+            max_df_ratio=0.9,
+            title_index=self.title_index,
+            title_boost=self.title_boost,
+        )
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         payloads = []
@@ -283,7 +319,10 @@ class SpectrumBM25Engine:
             path = self.spec_paths.get(doc_id)
             if path is not None:
                 decoder = decode_code_spec_bytes_fast if self.fast_decode else decode_code_spec_bytes
-                payload = decoder(path.read_bytes())
+                data = self.spec_bytes.get(doc_id)
+                if data is None:
+                    data = path.read_bytes()
+                payload = decoder(data)
                 if self.cache_hydration:
                     self.hydration_cache[doc_id] = payload
                 payloads.append(payload)
@@ -303,14 +342,24 @@ class SpectrumSnippetSidecarEngine(SpectrumBM25Engine):
         return report
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
-        return [self.snippets_by_id[doc_id] for doc_id in doc_ids if doc_id in self.snippets_by_id]
+        query = getattr(self, "last_query", "")
+        return [
+            windowed_snippet(self.snippets_by_id[doc_id], query, self.snippet_chars)
+            for doc_id in doc_ids
+            if doc_id in self.snippets_by_id
+        ]
 
 
 class SpectrumServingPipelineEngine:
-    name = "spectrum_serving_pipeline"
-
-    def __init__(self, benchmark_dir: Path):
+    def __init__(
+        self,
+        benchmark_dir: Path,
+        name: str = "spectrum_serving_pipeline",
+        preload_specs: bool = True,
+    ):
         self.benchmark_dir = benchmark_dir
+        self.name = name
+        self.preload_specs = preload_specs
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
         started = time.perf_counter()
@@ -319,6 +368,7 @@ class SpectrumServingPipelineEngine:
         self.retriever = SpectrumServingRetriever.from_codebase_benchmark(
             self.benchmark_dir,
             sidecar_path=sidecar_path,
+            preload_specs=self.preload_specs,
         )
         store_bytes = dir_size(self.benchmark_dir / "spectrum_spec")
         sidecar_bytes = sidecar_path.stat().st_size if sidecar_path.exists() else 0
@@ -644,8 +694,26 @@ def make_engines(names: list[str], benchmark_dir: Path) -> list[SearchEngine]:
             cache_hydration=True,
             fast_decode=True,
         ),
+        "spectrum_fast_ram": lambda: SpectrumBM25Engine(
+            benchmark_dir,
+            name="spectrum_spb_bm25_fast_ram",
+            fast_decode=True,
+            preload_specs=True,
+        ),
+        "spectrum_fast_ram_cached": lambda: SpectrumBM25Engine(
+            benchmark_dir,
+            name="spectrum_spb_bm25_fast_ram_cached",
+            cache_hydration=True,
+            fast_decode=True,
+            preload_specs=True,
+        ),
         "spectrum_snippet": lambda: SpectrumSnippetSidecarEngine(benchmark_dir),
         "spectrum_serving": lambda: SpectrumServingPipelineEngine(benchmark_dir),
+        "spectrum_serving_ram": lambda: SpectrumServingPipelineEngine(
+            benchmark_dir,
+            name="spectrum_serving_pipeline_ram",
+            preload_specs=True,
+        ),
         "dense_lsa": lambda: DenseLsaEngine(),
         "faiss": lambda: FaissLsaEngine(),
         "chroma": lambda: ChromaLsaEngine(),
@@ -674,8 +742,8 @@ def write_markdown(out_dir: Path, report: dict) -> None:
         "",
         "## Results",
         "",
-        f"| Engine | Status | Hit@1 | MRR | Recall@{top_k} | Search ms | Hydrate ms | E2E ms | P95 E2E ms | Build sec | Index bytes | Notes |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        f"| Engine | Status | Hit@1 | MRR | Recall@{top_k} | Search ms | Hydrate ms | E2E ms | P95 E2E ms | CPU E2E ms | CPU util % | Build sec | Build CPU sec | Index bytes | Notes |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in report["engines"]:
         metrics = row.get("metrics") or {}
@@ -684,7 +752,9 @@ def write_markdown(out_dir: Path, report: dict) -> None:
             f"{metrics.get('hit_at_1', '')} | {metrics.get('mrr', '')} | "
             f"{metrics.get(f'recall_at_{top_k}', '')} | {metrics.get('avg_query_ms', '')} | "
             f"{metrics.get('avg_hydrate_ms', '')} | {metrics.get('avg_end_to_end_ms', '')} | "
-            f"{metrics.get('p95_end_to_end_ms', '')} | {row.get('build_seconds', '')} | "
+            f"{metrics.get('p95_end_to_end_ms', '')} | {metrics.get('avg_cpu_end_to_end_ms', '')} | "
+            f"{metrics.get('cpu_utilization_pct', '')} | {row.get('build_seconds', '')} | "
+            f"{row.get('build_cpu_seconds', '')} | "
             f"{row.get('index_bytes') or ''} | {row.get('error', '')} |"
         )
     lines.extend([
@@ -693,7 +763,7 @@ def write_markdown(out_dir: Path, report: dict) -> None:
         "",
         "- `dense_lsa_numpy`, `faiss_lsa_flat`, and `chroma_lsa` use the same local LSA vectors so they measure vector-index plumbing, not frontier embedding quality.",
         "- `Search ms` is retrieval only; `E2E ms` is retrieval plus hydration of the returned top-k payloads.",
-        "- Standard RAG engines hydrate from raw text already held in memory. Spectrum hydrates by reading and decoding `.spec` files unless a Spectrum serving variant says otherwise.",
+        "- Standard RAG engines hydrate from raw text already held in memory. Spectrum serving preloads `.spec` payload bytes into RAM, then byte-prism decodes selected payloads on demand.",
         "- `opensearch_bm25_http`, `zoekt_cli`, and `lucene_pyserini_bm25` are dependency-gated production adapters.",
         "- Use labelled human queries before treating these numbers as product-level retrieval claims.",
     ])
@@ -754,7 +824,7 @@ def main() -> int:
         "--engine",
         action="append",
         default=[],
-        help="Engine to run. Repeatable. Choices: tfidf, raw_bm25, spectrum, spectrum_fast, spectrum_fast_cached, spectrum_snippet, spectrum_serving, dense_lsa, faiss, chroma, hybrid, opensearch, zoekt, lucene.",
+        help="Engine to run. Repeatable. Choices: tfidf, raw_bm25, spectrum, spectrum_cached, spectrum_fast, spectrum_fast_cached, spectrum_fast_ram, spectrum_fast_ram_cached, spectrum_snippet, spectrum_serving, spectrum_serving_ram, dense_lsa, faiss, chroma, hybrid, opensearch, zoekt, lucene.",
     )
     parser.add_argument(
         "--hydrate-limit",
