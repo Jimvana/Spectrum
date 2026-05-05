@@ -11,6 +11,8 @@ spec decode ./docs.specpack
 spec index ./docs.specpack
 spec search "query" ./docs.specpack
 spec benchmark ./docs.specpack
+spec demo
+spectrum demo
 spec gui
 ```
 
@@ -25,6 +27,12 @@ across code and prose instead of making users choose a code-vs-text mode.
 
 `spec benchmark` compares Spectrum against a raw text + BM25 baseline and writes
 `report.md`, `report.json`, `queries.json`, and the raw baseline store.
+
+`spectrum demo` (also available as `spec demo`) starts a guided bring-your-own
+repo flow. It asks for a Git URL or local path, chooses a local workspace and
+report directory, runs the codebase benchmark, verifies lossless Spectrum
+decoding, and optionally previews free-form searches against the built Spectrum
+store.
 
 `spec gui` starts a local browser UI for loading a folder or `.specpack`,
 running side-by-side Spectrum vs raw BM25 vs embedding/vector searches, and

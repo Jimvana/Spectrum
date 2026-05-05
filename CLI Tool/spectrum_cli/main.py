@@ -927,6 +927,18 @@ def command_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_demo(args: argparse.Namespace) -> int:
+    demo_path = REPO_ROOT / "demo" / "run_demo.py"
+    if not demo_path.exists():
+        die(
+            "demo support is not available in this packaged runtime. "
+            "Run from the Spectrum repository checkout."
+        )
+    from demo.run_demo import run_demo
+
+    return run_demo(args, repo_root=REPO_ROOT)
+
+
 def command_gui(args: argparse.Namespace) -> int:
     from gui.server import run
 
@@ -951,6 +963,8 @@ def build_parser() -> argparse.ArgumentParser:
   spec index ./docs.specpack
   spec search "oauth callback handler" ./docs.specpack
   spec benchmark ./docs.specpack
+  spec demo
+  spectrum demo
   spec search "oauth callback handler" ./docs.specdir
   spec info app.py.spec
   spec verify ./docs.specpack""",
@@ -995,6 +1009,20 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--all", action="store_true", help="Include every non-.spec file when benchmarking a folder")
     benchmark.add_argument("--clean", action="store_true", help="Delete the output directory before running")
     benchmark.set_defaults(func=command_benchmark)
+
+    demo = sub.add_parser("demo", help="Run a guided bring-your-own-repo Spectrum challenge")
+    demo.add_argument("--repo", help="Git repository URL to clone and benchmark")
+    demo.add_argument("--path", help="Local repository/folder path to benchmark")
+    demo.add_argument("--clone-path", help="Local clone destination for --repo")
+    demo.add_argument("--workspace-dir", help="Directory for cloned demo repositories")
+    demo.add_argument("--out-dir", help="Output directory for demo reports")
+    demo.add_argument("--max-files", type=int, help="Maximum source files to scan; 0 means all")
+    demo.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build")
+    demo.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k")
+    demo.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")
+    demo.add_argument("--clean", action="store_true", help="Delete the output directory before running")
+    demo.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
+    demo.set_defaults(func=command_demo)
 
     gui = sub.add_parser("gui", help="Run the local Spectrum search/benchmark GUI")
     gui.add_argument("--host", default="127.0.0.1", help="Host to bind")

@@ -33,6 +33,8 @@ wiki_enwiki_raw_sample/
 
 # Generated benchmark and encoding outputs
 benchmarks/generated/
+demo/runs/
+demo/workspaces/
 CLI Tool/coding-interview-university-main/
 CLI Tool/gui/.server.pid
 CLI Tool/spec-benchmark/raw_bm25/

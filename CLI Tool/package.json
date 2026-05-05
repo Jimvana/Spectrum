@@ -3,7 +3,8 @@
   "version": "0.4.1",
   "description": "Spectrum .spec command line tool",
   "bin": {
-    "spec": "./bin/spec.js"
+    "spec": "./bin/spec.js",
+    "spectrum": "./bin/spec.js"
   },
   "files": [
     "bin",
