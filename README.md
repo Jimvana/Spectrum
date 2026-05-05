@@ -79,6 +79,9 @@ Spectrum `.spec`+SPB2 BM25 before serving snippets. Optional FAISS, Chroma,
 OpenSearch, Zoekt, and Lucene/Pyserini adapters were skipped on this machine
 because their dependencies or services were not installed.
 
+<img width="640" height="480" alt="latency_vs_quality_size" src="https://github.com/user-attachments/assets/09ee679a-ab72-462e-835d-b1aede977c19" />
+
+
 ## The `.spec` Format
 
 Each `.spec` file has a 16-byte uncompressed header followed by a zlib-compressed token stream.
