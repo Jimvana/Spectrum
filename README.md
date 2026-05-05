@@ -1,147 +1,157 @@
-# Spectrum CLI
+# Spectrum Algo
 
-`spec` is the public command line interface for Spectrum `.spec` files and `.specpack` archives. It can encode source trees, decode them back to files, embed a searchable sparse retrieval index, and run a local benchmark.
+Spectrum Algo is an experimental semantic compression and retrieval-ready storage format for code and structured text.
 
-The package currently ships as a small Node executable that launches the Python Spectrum engine vendored in this repository. Node is used for npm distribution; Python performs the codec, indexing, search, and benchmark work.
+The project converts source text into `.spec` files by mapping meaningful language tokens to stable integer IDs, run-length encoding repeated IDs, and compressing the resulting stream. Unlike a passive compressor, the stored representation keeps a searchable semantic-token layer: token IDs can be indexed directly, compared, and decoded back to the original source on demand.
 
-## Install
+## Why It Exists
 
-```bash
-cd \Spectrum
-npm install -g .
-spec --help
+Most retrieval systems store raw chunks and build a separate search index beside them. Spectrum tests a different idea:
+
+> The compressed artifact and the retrieval representation can be the same thing.
+
+The current proof path is local, explainable, compressed retrieval for code and structured text. The project is not trying to beat gzip, Brotli, or zstd as a pure byte compressor. Those tools are storage baselines. Spectrum's claim is that `.spec` can be compact, lossless, searchable, and explainable at the same time.
+
+## Current Status
+
+- `.spec` binary format proven with byte-for-byte round trips.
+- Dictionary v10 covers Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, English text, and XML/Wiki syntax.
+- Encoders, decoders, migration tooling, and version snapshots are included.
+- Wikipedia/XML shard experiments verify large lossless corpora locally.
+- RAG storage benchmarks compare conventional raw text plus TF-IDF against `.spec` chunks plus a compact Spectrum BM25 index. Current loaders support SPB1 fixed-width postings and prefer SPB2 varint/delta postings when `postings_v2.bin` exists.
+
+Current 120-page Wikipedia sample signal with 6k-character chunks:
+
+| Store | Total bytes | Payload bytes | Index/vector bytes | Hit@1 | MRR | Avg query time |
+|---|---:|---:|---:|---:|---:|---:|
+| Conventional raw+TF-IDF | 6,430,395 | 4,226,166 | 2,204,110 | 1.000 | 1.000 | 1.233 ms |
+| Spectrum `.spec`+binary BM25 | 4,172,510 | 2,275,732 | 1,896,562 | 0.923 | 0.936 | 2.988 ms |
+
+Current codebase self-test signal with 80 files from this repository:
+
+| Store | Total bytes | Payload bytes | Index/vector bytes | Hit@1 | MRR | Avg query time |
+|---|---:|---:|---:|---:|---:|---:|
+| Conventional raw+TF-IDF | 2,772,764 | 2,395,479 | 377,135 | 0.217 | 0.359 | 0.446 ms |
+| Spectrum `.spec`+binary BM25 | 1,027,896 | 746,406 | 281,110 | 0.333 | 0.457 | 0.052 ms |
+
+The benchmark is still small and should not be treated as a production retrieval claim. It is a proof harness for measuring storage size, query quality, latency, decode cost, and lossless fidelity.
+
+Current 25k generated-text store after converting the Spectrum BM25 postings
+index from SPB1 to SPB2:
+
+| Store | Total bytes | Total MiB | Notes |
+|---|---:|---:|---|
+| Raw TF-IDF baseline | 127,528,437 | 121.62 | raw chunks plus TF-IDF |
+| Spectrum `.spec` + SPB1 | 132,005,046 | 125.89 | original fixed-width postings |
+| Spectrum `.spec` + SPB2 | 85,213,790 | 81.27 | varint/delta postings, exact same top-5 and scores |
+
+SPB2 reduced `postings.bin` equivalent storage from 62,550,276 bytes to
+15,759,020 bytes on that corpus.
+
+Current large Java ECB signal after rebuilding OpenJDK with SPB2 postings:
+
+| Store | Total bytes | Payload bytes | Index/vector bytes | Hit@1 | MRR | Recall@5 | Avg query time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Conventional raw+TF-IDF | 507,690,480 | 435,772,020 | 71,918,310 | 0.200 | 0.258 | 0.362 | 18.856 ms |
+| Spectrum `.spec`+SPB2 BM25 | 185,950,831 | 144,726,790 | 41,223,626 | 0.325 | 0.439 | 0.637 | 15.347 ms |
+
+The Java run covered 53,780 OpenJDK file-level chunks, including 52,532 Java
+files, and verified lossless decoding with zero fidelity failures. SPB2 reduced
+the previous OpenJDK Spectrum index by 61.94% while preserving the same
+generated-query rankings.
+
+## The `.spec` Format
+
+Each `.spec` file has a 16-byte uncompressed header followed by a zlib-compressed token stream.
+
+```text
+Header:
+  [0:4]   Magic:           b'SPEC'
+  [4:6]   Dict version:    uint16 BE
+  [6:8]   Flags:           uint16 BE
+  [8:12]  Original length: uint32 BE
+  [12:14] Language ID:     uint16 BE
+  [14:16] Checksum:        uint16 BE
+
+Body:
+  zlib-compressed uint32 token IDs
 ```
 
-For local development:
-
-```bash
-git clone https://github.com/Jimvana/Spectrum.git
-cd Spectrum
-npm install
-npm test
-npm link
-spec --version
-```
-
-## Requirements
-
-- Node.js 18 or newer
-- Python 3.10 or newer available as `python3` or `python`
-
-There are no npm runtime dependencies.
-
-## Usage
-
-```bash
-spec encode ./docs -a --index
-spec info ./docs.specpack
-spec search "oauth callback handler" ./docs.specpack
-spec decode ./docs.specpack -o ./docs-restored
-spec verify ./docs.specpack
-spec benchmark ./docs.specpack
-```
-
-### Commands
-
-| Command | Purpose |
-| --- | --- |
-| `encode` | Encode one file, a directory, or a `.specpack` archive. |
-| `decode` | Restore `.spec`, `.specdir`, or `.specpack` content back to source files. |
-| `index` | Build a search index. Archives embed the index by default; loose files use sidecar indexes. |
-| `search` | Search an existing index or a `.specpack`; missing or stale pack indexes are rebuilt automatically. |
-| `info` | Inspect metadata, sizes, language, checksum, and index state. |
-| `verify` | Decode into a temporary location and validate length/checksum fidelity. |
-| `benchmark` | Compare Spectrum archive plus BM25 against raw text plus BM25. |
-
-## Examples
-
-Encode a project as one searchable archive:
-
-```bash
-spec encode ./project -a --index -o project.specpack
-spec search "database migration rollback" project.specpack
-```
-
-Encode all files, not only recognised source/text extensions:
-
-```bash
-spec encode ./notes -a --all --index
-```
-
-Build or rebuild an index later:
-
-```bash
-spec index project.specpack
-```
-
-Write benchmark artifacts:
-
-```bash
-spec benchmark ./project --clean -o ./spec-benchmark
-```
-
-The benchmark writes `report.md`, `report.json`, `queries.json`, and a raw BM25 baseline store.
-
-## Development
-
-```bash
-npm test
-node ./bin/spec.js --help
-```
-
-The smoke tests exercise the npm executable, encode/decode fidelity, packed indexing, and search.
-
-## Language Tokens
-
-Spec can compress any text corpus, while keeping specific languages defined by their own tokens.
-
-Right now in dictionary v12, Spectrum covers:
-
-Python,
-HTML,
-JavaScript,
-CSS,
-Plain text / Markdown,
-TypeScript / TSX,
-SQL,
-Rust,
-PHP,
-XML / Wiki-style markup,
-Java,
-C,
-C++,
-Go,
-C#,
-Shell scripts,
-JSON,
-YAML,
-TOML,
-English word tokens,
+Unknown characters fall back to ASCII or Unicode marker IDs, so decoding remains lossless. The header stores dictionary version, language ID, source length, flags, and a checksum for verification.
 
 ## Repository Layout
 
 ```text
-bin/spec.js              Node executable shim
-spectrum_cli/main.py     CLI command implementation
-vendor/spectrum_algo/    Vendored Spectrum codec, tokenizers, spec format, and retrieval code
-tests/                   Node smoke tests for the public package
+encoder/             Original PNG/token encoder proof
+decoder/             Original PNG/token decoder proof
+spec_format/         Current .spec encoder, decoder, migrator, and frozen versions
+tokenizers/          Language-specific tokenizers
+rag/                 Retrieval and storage benchmark harnesses
+tools/               Wikipedia verification, indexing, and read tools
+versions/            Versioned snapshots of the encoding stack
+Runtime/             Runtime planning and implementation notes
 ```
 
-## Release Checklist
+Large Wikipedia dumps, generated benchmark stores, `.spec` outputs, caches, and local artifacts are intentionally ignored by Git.
 
-1. Update `VERSION` in `spectrum_cli/main.py`.
-2. Update `version` in `package.json`.
-3. Run `npm test`.
-4. Run `npm pack --dry-run` and inspect the file list.
-5. Publish with `npm publish --access public`.
+## Basic Usage
+
+Encode and decode workflows are currently Python script based. The exact commands vary by experiment, but the active RAG proof harness is:
+
+```powershell
+python rag\storage_benchmark.py `
+  --page-index wiki_enwiki_fullxml_sample\page_index.json `
+  --out-dir benchmarks\generated\storage_benchmark_6k `
+  --max-pages 120 `
+  --chunk-chars 6000 `
+  --overlap-chars 600 `
+  --queries 40 `
+  --top-k 5
+```
+
+The active codebase proof harness is:
+
+```powershell
+python rag\codebase_benchmark.py `
+  --source-root . `
+  --out-dir benchmarks\generated\codebase_benchmark_self_files `
+  --max-files 80 `
+  --queries 60
+```
+
+Use `--postings-format v2` or `--postings-format both` on the storage and
+codebase benchmark builders to write SPB2 indexes. Existing stores can be
+converted with `tools/convert_spectrum_postings_v2.py`, and SPB1/SPB2 equality
+can be checked with `tools/benchmark_postings_formats.py`.
+
+See `PROJECT_OUTLINE.md`, `RETRIEVAL_POSITIONING.md`, `RETRIEVAL_ENCODING_FLOW.md`, `RAG_STORAGE_BENCHMARK.md`, `RAG_RANKING_TODO.md`, and `BENCHMARK_LOG.md` for the detailed design notes and benchmark history.
+
+For repeatable third-party repository tests, use the External Codebase
+Benchmark workflow in `EXTERNAL_CODEBASE_BENCHMARK.md`. In future notes,
+`ECB` means: clone a repo, convert supported source files into lossless `.spec`
+chunks, build the Spectrum BM25 store, build the raw+TF-IDF baseline, verify
+fidelity, and compare storage/retrieval/latency.
+
+For comparisons against production-style retrieval engines, use
+`rag/production_benchmark.py` against an existing codebase benchmark directory.
+The runner supports local TF-IDF, raw BM25, Spectrum BM25, byte-prism Spectrum
+decode, the standard `spectrum_serving` flow (top-k snippets plus cached
+on-demand full `.spec` decode), local dense LSA, hybrid reciprocal-rank fusion,
+and dependency-gated adapters for FAISS, Chroma, OpenSearch, Zoekt, and
+Lucene/Pyserini. Generated stores now live under `benchmarks/generated/`, and
+tracked summaries live under `benchmarks/reports/`. See
+`benchmarks/PRODUCTION_ENGINE_BENCHMARKS.md`.
+
+## Roadmap
+
+- Improve query normalization and ranking quality for Spectrum BM25.
+- Formalize retrieval encoding profiles so `.spec` corpus builds carry chunking, normalization, indexing, and ranking settings without changing the lossless payload format.
+- Complete stronger production adapters for Lucene, Zoekt, OpenSearch, Chroma,
+  FAISS, neural embeddings, and hybrid retrieval.
+- Expand non-Wiki profile testing with larger codebases and code-aware labelled queries.
+- Package corpus shards, manifests, and dictionary libraries into a portable `.specpack` format.
+- Decide whether library dependencies should remain manifest-level or move into a future header format.
 
 ## License
 
-Spectrum is available under the PolyForm Noncommercial License 1.0.0.
-Commercial use requires a separate commercial license.
-
-See [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-## Status
-
-This is the public CLI surface for Spectrum while the codec runtime is still packaged inside the repo. The public API is the `spec` command; internal Python module paths should be treated as implementation details.
+Spectrum Algo is released under the MIT License. See `LICENSE`.

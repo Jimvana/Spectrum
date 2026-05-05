@@ -1,24 +1,53 @@
+# OS/editor noise
 .DS_Store
 Thumbs.db
+*.swp
+*.tmp
 
-node_modules/
-npm-debug.log*
-*.tgz
-
+# Python caches and local environments
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.ruff_cache/
 .mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
 
+# Node/vendor output
+node_modules/
+external_repos/
+deck_workspace/node_modules/
+deck_workspace/scratch/
+deck_workspace/output/
+
+# Large/generated corpus data
+test data/
+wiki_enwiki_dump/
+wiki_enwiki_fullxml_1hr/
+wiki_enwiki_fullxml_sample/
+wiki_enwiki_raw_10pct/
+wiki_enwiki_raw_sample/
+*.bz2
+*.zim
+
+# Generated benchmark and encoding outputs
+benchmarks/generated/
+CLI Tool/coding-interview-university-main/
+CLI Tool/gui/.server.pid
+CLI Tool/spec-benchmark/raw_bm25/
+rag/storage_benchmark*/
+rag/codebase_benchmark*/
+rag/ranking_eval*/
+rag/parameter_sweep*/
+rag/normalization_audit*/
+spec_format/output/
+results/
+output_images/
+spec compressed/
 *.spec
-*.specdir/
 *.specpack
-*.index.bin
-spectrum.index.bin
-spec-benchmark/
 
-.env
-.env.*
-.vscode/
-.idea/
+# Local logs and generated reports
+*.log
+coverage/

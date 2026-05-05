@@ -1,0 +1,22 @@
+The quick brown fox jumps over the lazy dog.
+It's a well-known pangram — every letter of the alphabet appears at least once.
+
+Hello, World! This is a test of the Spectrum Algo English dictionary.
+We're encoding plain text as coloured pixels, where each word becomes a single RGB value.
+Don't you think that's remarkable?
+
+NASA launched the James Webb Space Telescope on 25th December 2021.
+The BBC reported that over 1,000,000 people watched the launch live.
+It's the most powerful space telescope ever built — we'd say it's extraordinary.
+
+Chapter 1: Introduction
+In the beginning, there was binary. Ones and zeros, nothing more.
+But what if a processor could read colour instead of bits?
+That's the question Spectrum Algo sets out to answer.
+
+She said: "We're ready to proceed."
+He replied: "Are you absolutely certain?"
+"Yes," she confirmed. "I've checked it 3 times."
+
+Version 2.0 released on 1st April 2026.
+Previous versions: 1.0, 1.1, 1.2, 1.3 — all superseded.

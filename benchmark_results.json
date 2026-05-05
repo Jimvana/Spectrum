@@ -1,0 +1,98 @@
+[
+  {
+    "file": "fibonacci.py",
+    "lang": "Python",
+    "orig": 2201,
+    "gz": 885,
+    "spec": 1067,
+    "tokens": 1971
+  },
+  {
+    "file": "encoder.py",
+    "lang": "Python",
+    "orig": 12888,
+    "gz": 4187,
+    "spec": 4905,
+    "tokens": 11983
+  },
+  {
+    "file": "decoder.py",
+    "lang": "Python",
+    "orig": 7653,
+    "gz": 2689,
+    "spec": 3159,
+    "tokens": 7110
+  },
+  {
+    "file": "dictionary.py",
+    "lang": "Python",
+    "orig": 32335,
+    "gz": 9157,
+    "spec": 10808,
+    "tokens": 31685
+  },
+  {
+    "file": "mega_stdlib.py",
+    "lang": "Python",
+    "orig": 1123961,
+    "gz": 259670,
+    "spec": 299484,
+    "tokens": 1030294
+  },
+  {
+    "file": "socat.html",
+    "lang": "HTML",
+    "orig": 240449,
+    "gz": 48020,
+    "spec": 57961,
+    "tokens": 217537
+  },
+  {
+    "file": "underscore_docs.html",
+    "lang": "HTML",
+    "orig": 172922,
+    "gz": 40332,
+    "spec": 46967,
+    "tokens": 167613
+  },
+  {
+    "file": "jquery.js",
+    "lang": "JS",
+    "orig": 288550,
+    "gz": 84697,
+    "spec": 100554,
+    "tokens": 264175
+  },
+  {
+    "file": "bootstrap.js",
+    "lang": "JS",
+    "orig": 231702,
+    "gz": 46989,
+    "spec": 55921,
+    "tokens": 214121
+  },
+  {
+    "file": "normalize.css",
+    "lang": "CSS",
+    "orig": 6138,
+    "gz": 1737,
+    "spec": 2056,
+    "tokens": 5639
+  },
+  {
+    "file": "bootstrap.css",
+    "lang": "CSS",
+    "orig": 232948,
+    "gz": 30858,
+    "spec": 36487,
+    "tokens": 199756
+  },
+  {
+    "file": "bulma.min.css",
+    "lang": "CSS",
+    "orig": 207302,
+    "gz": 27438,
+    "spec": 31608,
+    "tokens": 169235
+  }
+]

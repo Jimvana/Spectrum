@@ -1,0 +1,96 @@
+{
+  "spectrum_snippet_only_ms": 0.37263333333333337,
+  "spectrum_selected_full_decode_ms": 5.7594666666666665,
+  "profiles": {
+    "standard_rag_snippets": {
+      "open_rate": 0.1,
+      "rows": [
+        {
+          "engine": "raw_tfidf_sklearn",
+          "label": "Raw TF-IDF",
+          "mean_e2e_ms": 0.8726,
+          "mean_recall": 0.5625,
+          "mean_mrr": 0.3283,
+          "mean_bytes": null
+        },
+        {
+          "engine": "spectrum_weighted",
+          "label": "Spectrum serving",
+          "mean_e2e_ms": 0.9113166666666668,
+          "mean_recall": 0.5055666666666667,
+          "mean_mrr": 0.32926666666666665,
+          "mean_bytes": 9172653.333333334
+        },
+        {
+          "engine": "raw_bm25_python",
+          "label": "Raw BM25",
+          "mean_e2e_ms": 2.4737666666666667,
+          "mean_recall": 0.8264,
+          "mean_mrr": 0.5741333333333334,
+          "mean_bytes": null
+        },
+        {
+          "engine": "faiss_lsa_flat",
+          "label": "FAISS vector",
+          "mean_e2e_ms": 4.6847,
+          "mean_recall": 0.5416666666666666,
+          "mean_mrr": 0.3349666666666667,
+          "mean_bytes": 12563509.333333334
+        },
+        {
+          "engine": "chroma_lsa",
+          "label": "Chroma vector DB",
+          "mean_e2e_ms": 5.578166666666666,
+          "mean_recall": 0.4875,
+          "mean_mrr": 0.29573333333333335,
+          "mean_bytes": 50194464
+        }
+      ]
+    },
+    "code_assistant": {
+      "open_rate": 0.35,
+      "rows": [
+        {
+          "engine": "raw_tfidf_sklearn",
+          "label": "Raw TF-IDF",
+          "mean_e2e_ms": 0.8726,
+          "mean_recall": 0.5625,
+          "mean_mrr": 0.3283,
+          "mean_bytes": null
+        },
+        {
+          "engine": "spectrum_weighted",
+          "label": "Spectrum serving",
+          "mean_e2e_ms": 2.2580249999999995,
+          "mean_recall": 0.5055666666666667,
+          "mean_mrr": 0.32926666666666665,
+          "mean_bytes": 9172653.333333334
+        },
+        {
+          "engine": "raw_bm25_python",
+          "label": "Raw BM25",
+          "mean_e2e_ms": 2.4737666666666667,
+          "mean_recall": 0.8264,
+          "mean_mrr": 0.5741333333333334,
+          "mean_bytes": null
+        },
+        {
+          "engine": "faiss_lsa_flat",
+          "label": "FAISS vector",
+          "mean_e2e_ms": 4.6847,
+          "mean_recall": 0.5416666666666666,
+          "mean_mrr": 0.3349666666666667,
+          "mean_bytes": 12563509.333333334
+        },
+        {
+          "engine": "chroma_lsa",
+          "label": "Chroma vector DB",
+          "mean_e2e_ms": 5.578166666666666,
+          "mean_recall": 0.4875,
+          "mean_mrr": 0.29573333333333335,
+          "mean_bytes": 50194464
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Spectrum Algo × RAG — How It Works</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0d0d12;
+      color: #e0e0ee;
+      min-height: 100vh;
+      padding: 44px 24px 60px;
+    }
+
+    /* ── PAGE HEADER ── */
+    .page-header { text-align: center; margin-bottom: 52px; }
+    .page-header h1 { font-size: 1.7rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
+    .page-header p  { color: #666; font-size: 0.88rem; }
+
+    /* ── SECTION ── */
+    .section { max-width: 920px; margin: 0 auto 48px; }
+    .section-title {
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.14em;
+      text-transform: uppercase; color: #555; margin-bottom: 20px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .section-title::after {
+      content: ''; flex: 1; height: 1px; background: #1e1e28;
+    }
+
+    /* ── PIPELINE ── */
+    .pipeline {
+      display: flex; align-items: flex-start; justify-content: center;
+      gap: 0; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px;
+    }
+    .node {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 8px; min-width: 110px; flex-shrink: 0;
+    }
+    .node-box {
+      width: 72px; height: 72px; border-radius: 16px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      font-size: 1.5rem; gap: 2px;
+      position: relative;
+    }
+    .node-name {
+      font-size: 0.72rem; font-weight: 600; text-align: center;
+      color: #ccc; line-height: 1.4; max-width: 100px;
+    }
+    .node-detail {
+      font-size: 0.62rem; color: #555; text-align: center;
+      max-width: 100px; line-height: 1.4; margin-top: -2px;
+    }
+    .arrow {
+      font-size: 1.2rem; color: #333; padding: 0 4px;
+      margin-top: 25px; flex-shrink: 0;
+    }
+
+    /* node colours */
+    .c-blue   { background:#131e35; border:1.5px solid #1e4488; color:#5599ee; }
+    .c-purple { background:#1a1230; border:1.5px solid #5522aa; color:#9966ee; }
+    .c-red    { background:#2a1212; border:1.5px solid #aa2222; color:#ee6666; }
+    .c-orange { background:#281a0a; border:1.5px solid #aa5500; color:#ee9944; }
+    .c-teal   { background:#0a2222; border:1.5px solid #118888; color:#44cccc; }
+    .c-green  { background:#0a2018; border:1.5px solid #118844; color:#44cc88; }
+    .c-spec   { background:#1a1e10; border:1.5px solid #6a8822; color:#aadd44; }
+    .c-gold   { background:#201a08; border:1.5px solid #996600; color:#ddbb22; }
+
+    /* ── .SPEC FORMAT EXPLAINER ── */
+    .spec-explainer {
+      max-width: 920px; margin: 0 auto 48px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .spec-card {
+      background: #111118; border: 1px solid #1e1e2e;
+      border-radius: 14px; padding: 20px 22px;
+    }
+    .spec-card h3 {
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
+      text-transform: uppercase; margin-bottom: 14px;
+    }
+    .spec-card.anatomy h3 { color: #aadd44; }
+    .spec-card.flow     h3 { color: #44cccc; }
+
+    .byte-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    }
+    .byte-tag {
+      font-size: 0.65rem; font-weight: 700; padding: 3px 8px;
+      border-radius: 6px; white-space: nowrap; flex-shrink: 0;
+    }
+    .bt-magic  { background:#1a2e10; color:#aadd44; border:1px solid #4a7a18; }
+    .bt-meta   { background:#0e1e30; color:#5599ee; border:1px solid #1e4488; }
+    .bt-flags  { background:#2a1a0a; color:#ee9944; border:1px solid #884400; }
+    .bt-body   { background:#1a0e2a; color:#9966ee; border:1px solid #5522aa; }
+    .byte-desc { font-size: 0.72rem; color: #888; line-height: 1.4; }
+
+    .flow-step {
+      display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px;
+    }
+    .flow-num {
+      width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700;
+      background: #0a2222; color: #44cccc; border: 1px solid #118888;
+    }
+    .flow-text { font-size: 0.75rem; color: #aaa; line-height: 1.5; }
+    .flow-text strong { color: #ddd; }
+
+    /* ── BENCHMARK TABLE ── */
+    .bench-wrap {
+      max-width: 920px; margin: 0 auto 48px;
+      background: #0f0f16; border: 1px solid #1e1e2e;
+      border-radius: 14px; overflow: hidden;
+    }
+    .bench-wrap table { width: 100%; border-collapse: collapse; }
+    .bench-wrap th {
+      padding: 10px 14px; text-align: left; font-size: 0.68rem;
+      font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    }
+    .bench-wrap th:nth-child(1) { background:#111118; color:#555; }
+    .bench-wrap th:nth-child(2) { background:#111118; color:#5599ee; }
+    .bench-wrap th:nth-child(3) { background:#111118; color:#ee9944; }
+    .bench-wrap th:nth-child(4) { background:#111118; color:#aadd44; }
+    .bench-wrap th:nth-child(5) { background:#111118; color:#44cccc; }
+    .bench-wrap td {
+      padding: 9px 14px; font-size: 0.75rem; border-top: 1px solid #161620;
+      color: #aaa;
+    }
+    .bench-wrap td:nth-child(1) { color: #ddd; font-weight: 600; }
+    .bar-cell { padding: 9px 14px; border-top: 1px solid #161620; }
+    .bar-bg { background: #1a1a24; border-radius: 4px; height: 10px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; }
+    .best { color: #44cc88 !important; font-weight: 700; }
+
+    /* ── RAG COMPARISON ── */
+    .rag-compare {
+      max-width: 920px; margin: 0 auto 48px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .rag-card {
+      background: #0f0f16; border: 1px solid #1e1e2e;
+      border-radius: 14px; padding: 22px 24px;
+    }
+    .rag-card h3 {
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
+      text-transform: uppercase; margin-bottom: 18px;
+    }
+    .rag-card.trad h3 { color: #ee6666; }
+    .rag-card.spec h3 { color: #aadd44; }
+
+    .rag-item {
+      display: flex; gap: 10px; margin-bottom: 14px; align-items: flex-start;
+    }
+    .rag-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+    .rag-item-text { font-size: 0.76rem; line-height: 1.55; color: #999; }
+    .rag-item-text strong { color: #ddd; display: block; margin-bottom: 1px; }
+
+    /* ── THE BIG IDEA ── */
+    .big-idea {
+      max-width: 920px; margin: 0 auto 48px;
+      background: linear-gradient(135deg, #0e1a28, #0e2018);
+      border: 1px solid #1a4030; border-radius: 16px; padding: 28px 32px;
+    }
+    .big-idea h3 {
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em;
+      text-transform: uppercase; color: #44cc88; margin-bottom: 16px;
+    }
+    .big-idea p {
+      font-size: 0.86rem; color: #aac8b8; line-height: 1.8; margin-bottom: 14px;
+    }
+    .big-idea p:last-child { margin-bottom: 0; }
+    .big-idea strong { color: #e0f0e8; }
+
+    /* ── TOKEN INSIGHT ── */
+    .token-insight {
+      max-width: 920px; margin: 0 auto 0;
+      background: #0f0f16; border: 1px solid #2a2a3a; border-radius: 16px;
+      padding: 28px 32px;
+    }
+    .token-insight h3 {
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em;
+      text-transform: uppercase; color: #9966ee; margin-bottom: 20px;
+    }
+    .token-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+    }
+    .token-box {
+      background: #111118; border: 1px solid #1e1e2e; border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .token-box h4 { font-size: 0.7rem; font-weight: 700; margin-bottom: 8px; color: #9966ee; }
+    .token-box p  { font-size: 0.72rem; color: #777; line-height: 1.5; }
+    .token-box p strong { color: #bbb; }
+
+    @media (max-width: 640px) {
+      .spec-explainer, .rag-compare, .token-grid { grid-template-columns: 1fr; }
+      .pipeline { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>Spectrum Algo × RAG — How It Actually Works</h1>
+  <p>From source text → .spec binary → retrieval — and why it matters</p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  1. TRADITIONAL RAG PIPELINE                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">① Traditional RAG pipeline</div>
+  <div class="pipeline">
+
+    <div class="node">
+      <div class="node-box c-blue">📄</div>
+      <div class="node-name">Source Text</div>
+      <div class="node-detail">Raw docs, code, articles</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-purple">✂️</div>
+      <div class="node-name">Chunker</div>
+      <div class="node-detail">Split into overlapping passages</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-orange">🧠</div>
+      <div class="node-name">Embedding Model</div>
+      <div class="node-detail">External API call per chunk — expensive</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-red">🗄️</div>
+      <div class="node-name">Vector DB</div>
+      <div class="node-detail">Stores text <em>and</em> giant float arrays separately</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-teal">🔍</div>
+      <div class="node-name">Query</div>
+      <div class="node-detail">Also embedded → cosine similarity on floats</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-green">💬</div>
+      <div class="node-name">LLM Answer</div>
+      <div class="node-detail">Retrieved raw text sent as context</div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  2. SPECTRUM RAG PIPELINE                                     -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">② Spectrum-powered RAG pipeline</div>
+  <div class="pipeline">
+
+    <div class="node">
+      <div class="node-box c-blue">📄</div>
+      <div class="node-name">Source Text</div>
+      <div class="node-detail">Same starting point</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-purple">✂️</div>
+      <div class="node-name">Chunker</div>
+      <div class="node-detail">Same as before</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-spec">🟩</div>
+      <div class="node-name">Spectrum Encoder</div>
+      <div class="node-detail">Text → token IDs → RLE → zlib → .spec binary</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-gold">📦</div>
+      <div class="node-name">.spec Store</div>
+      <div class="node-detail">Compact binary — 15–85% of original size</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-teal">🔍</div>
+      <div class="node-name">Query</div>
+      <div class="node-detail">Query → .spec → token ID frequency match</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-spec">🔓</div>
+      <div class="node-name">Spec Decoder</div>
+      <div class="node-detail">Lossless decode on demand — checksum verified</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="node">
+      <div class="node-box c-green">💬</div>
+      <div class="node-name">LLM Answer</div>
+      <div class="node-detail">Decoded text sent as context</div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  3. .SPEC FORMAT ANATOMY                                      -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="spec-explainer">
+
+  <div class="spec-card anatomy">
+    <h3>🔬 .spec file anatomy</h3>
+
+    <div class="byte-row">
+      <span class="byte-tag bt-magic">bytes 0–3</span>
+      <span class="byte-desc"><strong style="color:#ddd">Magic: <code>SPEC</code></strong> — identifies the format, like a fingerprint</span>
+    </div>
+    <div class="byte-row">
+      <span class="byte-tag bt-meta">bytes 4–5</span>
+      <span class="byte-desc"><strong style="color:#ddd">Dict version</strong> — which token dictionary was used to encode</span>
+    </div>
+    <div class="byte-row">
+      <span class="byte-tag bt-flags">bytes 6–7</span>
+      <span class="byte-desc"><strong style="color:#ddd">Flags</strong> — e.g. bit 0 = RLE compression was applied</span>
+    </div>
+    <div class="byte-row">
+      <span class="byte-tag bt-meta">bytes 8–11</span>
+      <span class="byte-desc"><strong style="color:#ddd">Original length</strong> — exact byte count of source, for verification</span>
+    </div>
+    <div class="byte-row">
+      <span class="byte-tag bt-meta">bytes 12–13</span>
+      <span class="byte-desc"><strong style="color:#ddd">Language ID</strong> — Python / HTML / JS / CSS / Text</span>
+    </div>
+    <div class="byte-row">
+      <span class="byte-tag bt-meta">bytes 14–15</span>
+      <span class="byte-desc"><strong style="color:#ddd">Checksum</strong> — sum of all original bytes mod 65536 (fidelity proof)</span>
+    </div>
+    <div class="byte-row">
+      <span class="byte-tag bt-body">bytes 16+</span>
+      <span class="byte-desc"><strong style="color:#ddd">Body</strong> — zlib-compressed stream of uint32 token IDs with RLE runs collapsed</span>
+    </div>
+  </div>
+
+  <div class="spec-card flow">
+    <h3>⚙️ How encoding works, step by step</h3>
+
+    <div class="flow-step">
+      <div class="flow-num">1</div>
+      <div class="flow-text"><strong>Tokenise</strong> — source is split into meaningful tokens using language-aware tokenisers (Python keywords, HTML tags, JS operators, CSS selectors, English words)</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">2</div>
+      <div class="flow-text"><strong>Map to IDs</strong> — each token maps to a uint32 ID from the shared Spectrum dictionary (234K+ entries). Unknown chars fall back to ASCII or Unicode escape IDs.</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">3</div>
+      <div class="flow-text"><strong>RLE pass</strong> — runs of 3+ identical token IDs are collapsed: <code>ID, RLE_MARKER, count</code>. Saves significantly on indented code and repeated patterns.</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">4</div>
+      <div class="flow-text"><strong>zlib level 9</strong> — the ID stream is compressed. Because IDs are semantically grouped (similar tokens have nearby IDs), DEFLATE compresses them harder than raw bytes.</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">5</div>
+      <div class="flow-text"><strong>16-byte header</strong> is prepended. Result is a self-contained, versioned, verifiable .spec file.</div>
+    </div>
+  </div>
+
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  4. BENCHMARK TABLE                                           -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">③ Real compression numbers (your benchmark results)</div>
+</div>
+
+<div class="bench-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Original</th>
+        <th>Gzip</th>
+        <th>.spec</th>
+        <th>Spec ratio</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>bootstrap.css</td>
+        <td>232 KB</td>
+        <td>30 KB</td>
+        <td class="best">36 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:15.7%;background:#aadd44"></div></div><span style="font-size:0.7rem;color:#888">0.16×</span></td>
+      </tr>
+      <tr>
+        <td>bulma.min.css</td>
+        <td>207 KB</td>
+        <td>27 KB</td>
+        <td class="best">31 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:15.2%;background:#aadd44"></div></div><span style="font-size:0.7rem;color:#888">0.15×</span></td>
+      </tr>
+      <tr>
+        <td>bootstrap.js</td>
+        <td>231 KB</td>
+        <td>47 KB</td>
+        <td>56 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:24.1%;background:#6aaa44"></div></div><span style="font-size:0.7rem;color:#888">0.24×</span></td>
+      </tr>
+      <tr>
+        <td>socat.html</td>
+        <td>240 KB</td>
+        <td>48 KB</td>
+        <td>58 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:24.1%;background:#6aaa44"></div></div><span style="font-size:0.7rem;color:#888">0.24×</span></td>
+      </tr>
+      <tr>
+        <td>mega_stdlib.py</td>
+        <td>1.1 MB</td>
+        <td>259 KB</td>
+        <td>299 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:26.6%;background:#6aaa44"></div></div><span style="font-size:0.7rem;color:#888">0.27×</span></td>
+      </tr>
+      <tr>
+        <td>underscore_docs.html</td>
+        <td>173 KB</td>
+        <td>40 KB</td>
+        <td>47 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:27.2%;background:#6aaa44"></div></div><span style="font-size:0.7rem;color:#888">0.27×</span></td>
+      </tr>
+      <tr>
+        <td>jquery.js</td>
+        <td>289 KB</td>
+        <td>85 KB</td>
+        <td>101 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:34.8%;background:#aaaa44"></div></div><span style="font-size:0.7rem;color:#888">0.35×</span></td>
+      </tr>
+      <tr>
+        <td>encoder.py</td>
+        <td>13 KB</td>
+        <td>4.2 KB</td>
+        <td>4.9 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:38.1%;background:#aaaa44"></div></div><span style="font-size:0.7rem;color:#888">0.38×</span></td>
+      </tr>
+      <tr>
+        <td>decoder.py</td>
+        <td>7.7 KB</td>
+        <td>2.7 KB</td>
+        <td>3.2 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:41.3%;background:#aaaa44"></div></div><span style="font-size:0.7rem;color:#888">0.41×</span></td>
+      </tr>
+      <tr>
+        <td>fibonacci.py</td>
+        <td>2.2 KB</td>
+        <td>0.9 KB</td>
+        <td>1.1 KB</td>
+        <td><div class="bar-bg"><div class="bar-fill" style="width:48.5%;background:#cc9944"></div></div><span style="font-size:0.7rem;color:#888">0.49×</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p style="max-width:920px;margin:-10px auto 48px;font-size:0.7rem;color:#444;padding:0 4px">
+  Note: gzip consistently beats .spec by ~14% on raw size — but gzip produces meaningless byte patterns. .spec produces <em>semantic token IDs</em>. That difference is everything.
+</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  5. RAG SIDE BY SIDE                                         -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="rag-compare">
+
+  <div class="rag-card trad">
+    <h3>❌ Traditional RAG — what it actually stores</h3>
+
+    <div class="rag-item">
+      <div class="rag-icon">📄</div>
+      <div class="rag-item-text">
+        <strong>Raw text chunks (full size)</strong>
+        e.g. 1 MB of source code stored as-is, uncompressed
+      </div>
+    </div>
+    <div class="rag-item">
+      <div class="rag-icon">🔢</div>
+      <div class="rag-item-text">
+        <strong>Float embeddings (per chunk)</strong>
+        1536 float32 values × 4 bytes = 6 KB per chunk. 1000 chunks = 6 MB just in floats — on top of the text
+      </div>
+    </div>
+    <div class="rag-item">
+      <div class="rag-icon">🌐</div>
+      <div class="rag-item-text">
+        <strong>External embedding model required</strong>
+        Every new document, every query — paid API call or local model run
+      </div>
+    </div>
+    <div class="rag-item">
+      <div class="rag-icon">📊</div>
+      <div class="rag-item-text">
+        <strong>Cosine similarity on floats</strong>
+        Meaningful but opaque — you can't inspect or reason about why two chunks matched
+      </div>
+    </div>
+  </div>
+
+  <div class="rag-card spec">
+    <h3>✅ Spectrum RAG — what it stores instead</h3>
+
+    <div class="rag-item">
+      <div class="rag-icon">📦</div>
+      <div class="rag-item-text">
+        <strong>.spec files only — text baked in, compressed</strong>
+        That same 1 MB source code → 260–300 KB .spec. No separate float arrays.
+      </div>
+    </div>
+    <div class="rag-item">
+      <div class="rag-icon">🧩</div>
+      <div class="rag-item-text">
+        <strong>Token IDs are the "embedding"</strong>
+        The token frequency distribution across the .spec body IS a semantic fingerprint — no external model needed to generate it
+      </div>
+    </div>
+    <div class="rag-item">
+      <div class="rag-icon">🔌</div>
+      <div class="rag-item-text">
+        <strong>No external dependencies at query time</strong>
+        Spectrum encoder/decoder is self-contained — works offline, no API cost
+      </div>
+    </div>
+    <div class="rag-item">
+      <div class="rag-icon">🔍</div>
+      <div class="rag-item-text">
+        <strong>Interpretable similarity</strong>
+        You can see <em>which tokens</em> drove a match. "These chunks matched because they both heavily use <code>class</code>, <code>def</code>, <code>import</code> tokens."
+      </div>
+    </div>
+  </div>
+
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  6. THE BIG IDEA                                              -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="big-idea">
+  <h3>💡 The core insight</h3>
+  <p>
+    Traditional RAG stores your data <strong>twice</strong> — once as readable text, once as a huge opaque blob of floats.
+    The floats are generated by an external model that has no knowledge of your specific data's structure.
+    They can't be inspected, don't compress well, and cost money to generate.
+  </p>
+  <p>
+    Spectrum's token IDs are different. They're <strong>semantically grounded</strong> — they represent actual meaningful units
+    of your source language (Python keywords, HTML tags, JS operators, English words). Two files that
+    share many of the same token IDs are genuinely similar in structure and content. You don't need a
+    neural network to tell you that — the token overlap <em>is</em> the signal.
+  </p>
+  <p>
+    The open question is: <strong>is token-ID similarity good enough to replace vector embeddings for retrieval?</strong>
+    For code and structured text, it very well might be — and it would be faster, cheaper, smaller, and fully explainable.
+    That's Phase 2.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  7. TOKEN AS EMBEDDING — THREE ANGLES                        -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="token-insight" style="max-width:920px;margin:48px auto 0">
+  <h3>🔬 Three ways token IDs could power retrieval</h3>
+  <div class="token-grid">
+
+    <div class="token-box">
+      <h4>Token Frequency (TF-IDF style)</h4>
+      <p>Count how often each token ID appears in a .spec chunk. Build a sparse vector of token frequencies. Use <strong>cosine similarity on those sparse vectors</strong> — no neural net, no floats. Mathematically equivalent to BM25 but using Spectrum tokens instead of words.</p>
+    </div>
+
+    <div class="token-box">
+      <h4>Token Sequence (n-gram)</h4>
+      <p>Look at sequences of token IDs, not just frequencies. Two code files that share the same <strong>patterns of token IDs</strong> (e.g. <code>def → name → ( → args → )</code>) are structurally similar. This catches things frequency alone misses.</p>
+    </div>
+
+    <div class="token-box">
+      <h4>Token Fingerprint (MinHash)</h4>
+      <p>Use the set of unique token IDs as a <strong>MinHash signature</strong> — a fixed-size fingerprint of the content. Ultra-fast approximate similarity search with no floating point at all. Scales to millions of .spec files.</p>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
