@@ -26,7 +26,7 @@ The original spark was a thought experiment: *what if processors could read weig
 
 ### Phase 1 — Completed ✅
 1. Prove round-trip fidelity — encode source → .spec → decode back to source, byte-for-byte identical, checksum verified
-2. Build a stable, versioned token dictionary covering Python, HTML, JS, CSS, and plain English
+2. Build a stable, versioned token dictionary covering Python, HTML, JS, TS, CSS, SQL, Rust, PHP, XML/Wiki, Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and plain English
 3. Achieve meaningful compression — within striking distance of gzip, across multiple languages
 4. Establish the .spec binary format as the canonical Spectrum output
 
@@ -75,7 +75,7 @@ manifest.
 For example, a cleaned Wikipedia corpus declares:
 
 ```
-spectrum-core@10
+spectrum-core@12
 english-text@1
 wikimedia-clean-text@1
 ```
@@ -83,7 +83,7 @@ wikimedia-clean-text@1
 A lossless full-XML Wikimedia sample now declares:
 
 ```
-spectrum-core@10
+spectrum-core@12
 english-text@1
 wikimedia-xml@1
 ```
@@ -148,7 +148,7 @@ The gap vs gzip (~15–21%) is the cost of the semantic token layer. It's not a 
       v9.py           # SPEC_TOKEN_COUNT = 234,893  ← current
     /output           # encoded .spec files and their decoded counterparts
     spec_migrate.py   # upgrades old .spec files to the current dictionary version
-  /tokenizers         # language-specific tokenisers (9 languages)
+  /tokenizers         # language-specific tokenisers (dictionary v12 language set)
     python_tokenizer  # via encoder.py (Python stdlib tokenize)
     html_tokenizer.py
     js_tokenizer.py
@@ -211,7 +211,7 @@ Each time the dictionary is bumped to a new version, a snapshot of the core enco
 
 - **Language:** Python 3
 - **Compression:** zlib (level 9), RLE on token ID stream
-- **Dictionary:** v10 — 234,957 tokens across Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, English plain text, and XML/Wiki source syntax
+- **Dictionary:** v12 — 235,021 SPEC tokens across Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML/Wiki, Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English plain text
 - **Backwards compatibility:** all `.spec` files from v7 onwards are decodable; frozen snapshot system stores one integer per historical version
 - **No external ML dependencies** — Spectrum is self-contained
 

@@ -22,6 +22,7 @@ from spec_format._frozen import (
 
 LANGUAGE_TEXT = 4
 LANGUAGE_XML = 9
+LANGUAGE_JAVA = 10
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants (must match encoder)

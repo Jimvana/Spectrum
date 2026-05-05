@@ -41,26 +41,40 @@ from spec_format._frozen import get_ascii_base_for_version, get_id_to_token_for_
 from spec_format.extension_tokens import extension_id_to_literal
 from spec_format.spec_encoder import (
     FLAG_RLE,
+    LANGUAGE_C,
+    LANGUAGE_CPP,
+    LANGUAGE_CSHARP,
     LANGUAGE_CSS,
+    LANGUAGE_GO,
     LANGUAGE_HTML,
     LANGUAGE_JS,
     LANGUAGE_JAVA,
+    LANGUAGE_JSON,
     LANGUAGE_PHP,
     LANGUAGE_PYTHON,
     LANGUAGE_RUST,
+    LANGUAGE_SHELL,
     LANGUAGE_SQL,
     LANGUAGE_TEXT,
+    LANGUAGE_TOML,
     LANGUAGE_TS,
+    LANGUAGE_YAML,
     apply_rle_ids,
     build_header,
     tokens_to_ids,
 )
+from tokenizers.config_tokenizer import tokenise_config
+from tokenizers.c_tokenizer import tokenise_c
+from tokenizers.cpp_tokenizer import tokenise_cpp
+from tokenizers.csharp_tokenizer import tokenise_csharp
 from tokenizers.css_tokenizer import tokenise_css
+from tokenizers.go_tokenizer import tokenise_go
 from tokenizers.html_tokenizer import tokenise_html
 from tokenizers.java_tokenizer import tokenise_java
 from tokenizers.js_tokenizer import tokenise_js
 from tokenizers.php_tokenizer import tokenise_php
 from tokenizers.rust_tokenizer import tokenise_rust
+from tokenizers.shell_tokenizer import tokenise_shell
 from tokenizers.sql_tokenizer import tokenise_sql
 from tokenizers.text_tokenizer import tokenize_text
 from tokenizers.ts_tokenizer import tokenise_ts
@@ -88,6 +102,23 @@ LANG_BY_EXT = {
     ".php": LANGUAGE_PHP,
     ".phtml": LANGUAGE_PHP,
     ".java": LANGUAGE_JAVA,
+    ".c": LANGUAGE_C,
+    ".h": LANGUAGE_C,
+    ".cpp": LANGUAGE_CPP,
+    ".cc": LANGUAGE_CPP,
+    ".cxx": LANGUAGE_CPP,
+    ".hpp": LANGUAGE_CPP,
+    ".hh": LANGUAGE_CPP,
+    ".hxx": LANGUAGE_CPP,
+    ".go": LANGUAGE_GO,
+    ".cs": LANGUAGE_CSHARP,
+    ".sh": LANGUAGE_SHELL,
+    ".bash": LANGUAGE_SHELL,
+    ".zsh": LANGUAGE_SHELL,
+    ".json": LANGUAGE_JSON,
+    ".yaml": LANGUAGE_YAML,
+    ".yml": LANGUAGE_YAML,
+    ".toml": LANGUAGE_TOML,
 }
 
 LANG_NAMES = {
@@ -101,6 +132,14 @@ LANG_NAMES = {
     LANGUAGE_RUST: "rust",
     LANGUAGE_PHP: "php",
     LANGUAGE_JAVA: "java",
+    LANGUAGE_C: "c",
+    LANGUAGE_CPP: "cpp",
+    LANGUAGE_GO: "go",
+    LANGUAGE_CSHARP: "csharp",
+    LANGUAGE_SHELL: "shell",
+    LANGUAGE_JSON: "json",
+    LANGUAGE_YAML: "yaml",
+    LANGUAGE_TOML: "toml",
 }
 
 TOKENIZER_BY_LANG = {
@@ -113,6 +152,14 @@ TOKENIZER_BY_LANG = {
     LANGUAGE_RUST: tokenise_rust,
     LANGUAGE_PHP: tokenise_php,
     LANGUAGE_JAVA: tokenise_java,
+    LANGUAGE_C: tokenise_c,
+    LANGUAGE_CPP: tokenise_cpp,
+    LANGUAGE_GO: tokenise_go,
+    LANGUAGE_CSHARP: tokenise_csharp,
+    LANGUAGE_SHELL: tokenise_shell,
+    LANGUAGE_JSON: tokenise_config,
+    LANGUAGE_YAML: tokenise_config,
+    LANGUAGE_TOML: tokenise_config,
 }
 
 DEFAULT_EXCLUDE_DIRS = {

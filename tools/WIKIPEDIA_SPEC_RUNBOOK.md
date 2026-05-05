@@ -39,7 +39,7 @@ The manifest declares the Spectrum libraries required to interpret the shard
 set:
 
 ```text
-spectrum-core@9
+spectrum-core@12
 english-text@1
 wikimedia-clean-text@1
 ```
@@ -85,7 +85,7 @@ Raw mode keeps templates, tables, refs, and MediaWiki markup. It is more
 complete, but it will compress and search differently because the token stream
 contains markup noise.
 
-Raw mode uses dictionary v10 XML/MediaWiki tokens for repeated article-source
+Raw mode uses dictionary v12 XML/MediaWiki tokens for repeated article-source
 syntax while preserving the extracted article wikitext records exactly.
 
 ## Full XML Variant
@@ -115,7 +115,7 @@ python tools\wiki_dump_to_spec.py `
 Full XML mode declares:
 
 ```text
-spectrum-core@10
+spectrum-core@12
 english-text@1
 wikimedia-xml@1
 ```
@@ -133,7 +133,7 @@ directly instead of parsing article records out of it.
 - `manifest.json` also records required extension libraries. Decoders should
   verify library name, version, and hash before treating a shard set as
   canonical.
-- Dictionary v10 includes core XML/MediaWiki source tokens. Full XML shards use
+- Dictionary v12 includes core XML/MediaWiki source tokens. Full XML shards use
   language id `9` (`XML/Wiki`) in the `.spec` header.
 - Full English Wikipedia will take a long time and needs substantial temporary
   disk space: keep room for the 24+ GiB bzip2 dump plus extracted text volume as

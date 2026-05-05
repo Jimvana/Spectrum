@@ -18,7 +18,9 @@ Design principle — append-only IDs:
 Version history:
   v7  — Python, HTML, JS, CSS, English text           (234,702 tokens)
   v8  — adds TypeScript, SQL, Rust                    (234,830 tokens)
-  v9  — adds PHP                                      (234,893 tokens)  ← current
+  v9  — adds PHP                                      (234,893 tokens)
+  v10 — adds XML/Wiki source tokens                   (234,957 tokens)
+  v11 — Java tokenizer wiring, no dictionary growth   (234,957 tokens)
 
 Adding a new version snapshot:
   1. Run: python -c "import dictionary as D; print(len(D.SPEC_TOKENS))"
@@ -42,12 +44,14 @@ from spec_format._frozen.v7 import SPEC_TOKEN_COUNT as _V7_COUNT
 from spec_format._frozen.v8 import SPEC_TOKEN_COUNT as _V8_COUNT
 from spec_format._frozen.v9 import SPEC_TOKEN_COUNT as _V9_COUNT
 from spec_format._frozen.v10 import SPEC_TOKEN_COUNT as _V10_COUNT
+from spec_format._frozen.v11 import SPEC_TOKEN_COUNT as _V11_COUNT
 
 VERSION_COUNTS: dict[int, int] = {
     7: _V7_COUNT,
     8: _V8_COUNT,
     9: _V9_COUNT,
     10: _V10_COUNT,
+    11: _V11_COUNT,
 }
 
 # Minimum supported version for backward-compatible decoding

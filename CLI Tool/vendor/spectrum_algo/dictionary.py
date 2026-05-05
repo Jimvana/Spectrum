@@ -1,5 +1,5 @@
 """
-Spectrum Algo — Dictionary v9
+Spectrum Algo — Dictionary v12
 Colour ↔ Token mapping for the Spectrum encoding system.
 
 Design rules:
@@ -28,8 +28,9 @@ Design rules:
   - PHP keywords:  warm-sand family          R=245, B=80
   - PHP functions: warm-sand/light family    R=245, B=100
 
-Version: 9  (adds PHP language support.
-             Covers Python, HTML, JS, TS, CSS, SQL, Rust, PHP, and English text.)
+Version: 12  (adds C, C++, Go, C#, shell, JSON, YAML, and TOML support.
+              Covers Python, HTML, JS, TS, CSS, SQL, Rust, PHP, XML/Wiki,
+              Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English text.)
 
 RLE design:
   - R channel value 253 is reserved as the RLE marker
@@ -46,7 +47,7 @@ RLE design:
 # Version tag — encoded in the header pixel's alpha channel (if RGBA),
 # or as a dedicated header row in future versions.
 # ---------------------------------------------------------------------------
-DICT_VERSION = 10
+DICT_VERSION = 12
 
 # ---------------------------------------------------------------------------
 # Python keywords  →  RGB
@@ -1069,6 +1070,100 @@ MEDIAWIKI_TOKENS = {
 }
 
 # ---------------------------------------------------------------------------
+# v12 language additions.
+# These are appended after all v10 tokens in TOKEN_TO_RGB. Tokens that already
+# exist in earlier dictionaries are intentionally omitted to preserve existing
+# token IDs and colour mappings.
+# ---------------------------------------------------------------------------
+C_KEYWORDS = {
+    "signed":     (238,  50, 70),
+    "typedef":    (238,  58, 70),
+    "sizeof":     (238,  66, 70),
+    "goto":       (238,  74, 70),
+    "_Bool":      (238,  82, 70),
+    "_Complex":   (238,  90, 70),
+    "_Imaginary": (238,  98, 70),
+}
+
+C_STDLIB = {
+    "printf":  (238, 110, 90),
+    "scanf":   (238, 118, 90),
+    "malloc":  (238, 126, 90),
+    "calloc":  (238, 134, 90),
+    "realloc": (238, 142, 90),
+    "memcpy":  (238, 150, 90),
+    "memset":  (238, 158, 90),
+}
+
+CPP_KEYWORDS = {
+    "typename":         (239,  50, 80),
+    "constexpr":        (239,  58, 80),
+    "consteval":        (239,  66, 80),
+    "constinit":        (239,  74, 80),
+    "decltype":         (239,  82, 80),
+    "noexcept":         (239,  90, 80),
+    "nullptr":          (239,  98, 80),
+    "protected":        (239, 106, 80),
+    "alignas":          (239, 114, 80),
+    "alignof":          (239, 122, 80),
+    "static_cast":      (239, 130, 80),
+    "dynamic_cast":     (239, 138, 80),
+    "reinterpret_cast": (239, 146, 80),
+    "const_cast":       (239, 154, 80),
+}
+
+CPP_STDLIB = {
+    "std":           (239, 170, 100),
+    "unordered_map": (239, 178, 100),
+    "unordered_set": (239, 186, 100),
+    "shared_ptr":    (239, 194, 100),
+    "unique_ptr":    (239, 202, 100),
+    "make_shared":   (239, 210, 100),
+    "make_unique":   (239, 218, 100),
+    "cout":          (239, 226, 100),
+    "cin":           (239, 234, 100),
+    "endl":          (239, 242, 100),
+}
+
+GO_KEYWORDS = {
+    "chan":        (236,  50, 90),
+    "fallthrough": (236,  58, 90),
+    "println":     (236,  66, 90),
+}
+
+CSHARP_IDENTIFIERS = {
+    "Task":        (237,  50, 90),
+    "IEnumerable": (237,  58, 90),
+    "List":        (237,  66, 90),
+    "Dictionary":  (237,  74, 90),
+    "Console":     (237,  82, 90),
+    "WriteLine":   (237,  90, 90),
+}
+
+SHELL_TOKENS = {
+    "esac":    (235,  50, 80),
+    "coproc":  (235,  58, 80),
+    "unalias": (235,  66, 80),
+    "grep":    (235,  74, 80),
+    "awk":     (235,  82, 80),
+    "sed":     (235,  90, 80),
+    "wget":    (235,  98, 80),
+    "chmod":   (235, 106, 80),
+    "chown":   (235, 114, 80),
+    "mkdir":   (235, 122, 80),
+    "rm":      (235, 130, 80),
+    "cp":      (235, 138, 80),
+    "mv":      (235, 146, 80),
+}
+
+CONFIG_TOKENS = {
+    "dependencies":    (234,  50, 100),
+    "devDependencies": (234,  58, 100),
+    "scripts":         (234,  66, 100),
+    "enabled":         (234,  74, 100),
+}
+
+# ---------------------------------------------------------------------------
 # English text — control tokens  →  RGB  (near-black, R=1, G=0, B=1–5)
 # These are emitted by the text tokenizer to control capitalisation and
 # word-spelling.  They are interpreted by the text decoder as state changes,
@@ -1177,6 +1272,15 @@ TOKEN_TO_RGB: dict[str, tuple[int, int, int]] = {
     # v10 additions
     **XML_TOKENS,
     **MEDIAWIKI_TOKENS,
+    # v12 additions
+    **C_KEYWORDS,
+    **C_STDLIB,
+    **CPP_KEYWORDS,
+    **CPP_STDLIB,
+    **GO_KEYWORDS,
+    **CSHARP_IDENTIFIERS,
+    **SHELL_TOKENS,
+    **CONFIG_TOKENS,
 }
 
 # ---------------------------------------------------------------------------
@@ -1307,6 +1411,15 @@ if __name__ == "__main__":
     print(f"  --- v10 ---")
     print(f"  XML tokens:        {len(XML_TOKENS)}")
     print(f"  MediaWiki tokens:  {len(MEDIAWIKI_TOKENS)}")
+    print(f"  --- v12 ---")
+    print(f"  C keywords:        {len(C_KEYWORDS)}")
+    print(f"  C stdlib:          {len(C_STDLIB)}")
+    print(f"  C++ keywords:      {len(CPP_KEYWORDS)}")
+    print(f"  C++ stdlib:        {len(CPP_STDLIB)}")
+    print(f"  Go keywords:       {len(GO_KEYWORDS)}")
+    print(f"  C# identifiers:    {len(CSHARP_IDENTIFIERS)}")
+    print(f"  Shell tokens:      {len(SHELL_TOKENS)}")
+    print(f"  Config tokens:     {len(CONFIG_TOKENS)}")
     print(f"\n  RGB space used:    {len(TOKEN_TO_RGB):,} / 16,777,216 "
           f"({100*len(TOKEN_TO_RGB)/16_777_216:.2f}%)")
     print()

@@ -10,7 +10,11 @@ Header (16 bytes, uncompressed):
   [6:8]   Flags:           uint16 BE
                              bit 0 = RLE enabled
   [8:12]  Original length: uint32 BE  (bytes in original UTF-8 source)
-  [12:14] Language ID:     uint16 BE  (0=Python, 1=HTML, 2=JS — future use)
+  [12:14] Language ID:     uint16 BE  (0=Python, 1=HTML, 2=JS, 3=CSS,
+                                       4=Text, 5=TS, 6=SQL, 7=Rust, 8=PHP,
+                                       9=XML/Wiki, 10=Java, 11=C, 12=C++,
+                                       13=Go, 14=C#, 15=Shell, 16=JSON,
+                                       17=YAML, 18=TOML)
   [14:16] Checksum:        uint16 BE  (sum of all original bytes mod 65536)
 
 Body (zlib-compressed, level 9):
@@ -27,7 +31,7 @@ Body (zlib-compressed, level 9):
     0xFFFFFFFF              reserved
 
 RLE threshold: runs of 3+ identical token IDs.
-  A run of N → emit ID once, then emit SPEC_ID_RLE, then emit (N-1) as uint16.
+  A run of N → emit ID once, then emit SPEC_ID_RLE, then emit (N-1) as uint32.
   Run of 1 or 2 → emit normally (no saving at run=2, no overhead at run=1).
 
 Why 2 bytes per token beats 3 bytes (RGB pixel)?
@@ -56,6 +60,13 @@ from tokenizers.ts_tokenizer import tokenise_ts
 from tokenizers.sql_tokenizer import tokenise_sql
 from tokenizers.rust_tokenizer import tokenise_rust
 from tokenizers.php_tokenizer import tokenise_php
+from tokenizers.java_tokenizer import tokenise_java
+from tokenizers.c_tokenizer import tokenise_c
+from tokenizers.cpp_tokenizer import tokenise_cpp
+from tokenizers.go_tokenizer import tokenise_go
+from tokenizers.csharp_tokenizer import tokenise_csharp
+from tokenizers.shell_tokenizer import tokenise_shell
+from tokenizers.config_tokenizer import tokenise_config
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -71,6 +82,15 @@ LANGUAGE_SQL    = 6
 LANGUAGE_RUST   = 7
 LANGUAGE_PHP    = 8
 LANGUAGE_XML    = 9
+LANGUAGE_JAVA   = 10
+LANGUAGE_C      = 11
+LANGUAGE_CPP    = 12
+LANGUAGE_GO     = 13
+LANGUAGE_CSHARP = 14
+LANGUAGE_SHELL  = 15
+LANGUAGE_JSON   = 16
+LANGUAGE_YAML   = 17
+LANGUAGE_TOML   = 18
 
 FLAG_RLE = 0b0000_0001
 
@@ -92,6 +112,24 @@ _EXT_TO_LANG = {
     ".php":  LANGUAGE_PHP,
     ".phtml":LANGUAGE_PHP,
     ".xml":  LANGUAGE_XML,
+    ".java": LANGUAGE_JAVA,
+    ".c":    LANGUAGE_C,
+    ".h":    LANGUAGE_C,
+    ".cpp":  LANGUAGE_CPP,
+    ".cc":   LANGUAGE_CPP,
+    ".cxx":  LANGUAGE_CPP,
+    ".hpp":  LANGUAGE_CPP,
+    ".hh":   LANGUAGE_CPP,
+    ".hxx":  LANGUAGE_CPP,
+    ".go":   LANGUAGE_GO,
+    ".cs":   LANGUAGE_CSHARP,
+    ".sh":   LANGUAGE_SHELL,
+    ".bash": LANGUAGE_SHELL,
+    ".zsh":  LANGUAGE_SHELL,
+    ".json": LANGUAGE_JSON,
+    ".yaml": LANGUAGE_YAML,
+    ".yml":  LANGUAGE_YAML,
+    ".toml": LANGUAGE_TOML,
 }
 
 _LANG_NAMES = {
@@ -105,6 +143,15 @@ _LANG_NAMES = {
     LANGUAGE_RUST:   "Rust",
     LANGUAGE_PHP:    "PHP",
     LANGUAGE_XML:    "XML/Wiki",
+    LANGUAGE_JAVA:   "Java",
+    LANGUAGE_C:      "C",
+    LANGUAGE_CPP:    "C++",
+    LANGUAGE_GO:     "Go",
+    LANGUAGE_CSHARP: "C#",
+    LANGUAGE_SHELL:  "Shell",
+    LANGUAGE_JSON:   "JSON",
+    LANGUAGE_YAML:   "YAML",
+    LANGUAGE_TOML:   "TOML",
 }
 
 
@@ -283,6 +330,20 @@ def encode_file(source_path: str, output_path: str,
         tokens = tokenise_php(source)
     elif language_id == LANGUAGE_XML:
         tokens = tokenize_wiki_source(source)
+    elif language_id == LANGUAGE_JAVA:
+        tokens = tokenise_java(source)
+    elif language_id == LANGUAGE_C:
+        tokens = tokenise_c(source)
+    elif language_id == LANGUAGE_CPP:
+        tokens = tokenise_cpp(source)
+    elif language_id == LANGUAGE_GO:
+        tokens = tokenise_go(source)
+    elif language_id == LANGUAGE_CSHARP:
+        tokens = tokenise_csharp(source)
+    elif language_id == LANGUAGE_SHELL:
+        tokens = tokenise_shell(source)
+    elif language_id in (LANGUAGE_JSON, LANGUAGE_YAML, LANGUAGE_TOML):
+        tokens = tokenise_config(source)
     else:
         tokens = tokenise_source(source)
 
@@ -351,7 +412,11 @@ def main():
     parser.add_argument("--zlib-level", type=int, default=9,
                         help="zlib compression level 1–9 (default: 9)")
     parser.add_argument("--lang",
-                        choices=["py", "html", "js", "css", "txt", "ts", "sql", "rs", "php", "xml"],
+                        choices=[
+                            "py", "html", "js", "css", "txt", "ts", "sql",
+                            "rs", "php", "xml", "java", "c", "cpp", "go",
+                            "cs", "sh", "json", "yaml", "toml",
+                        ],
                         default=None,
                         help="Force language (default: auto-detect from extension)")
     args = parser.parse_args()
@@ -378,6 +443,15 @@ def main():
         "rs":   LANGUAGE_RUST,
         "php":  LANGUAGE_PHP,
         "xml":  LANGUAGE_XML,
+        "java": LANGUAGE_JAVA,
+        "c":    LANGUAGE_C,
+        "cpp":  LANGUAGE_CPP,
+        "go":   LANGUAGE_GO,
+        "cs":   LANGUAGE_CSHARP,
+        "sh":   LANGUAGE_SHELL,
+        "json": LANGUAGE_JSON,
+        "yaml": LANGUAGE_YAML,
+        "toml": LANGUAGE_TOML,
     }
     lang_id  = lang_map[args.lang] if args.lang else LANGUAGE_PYTHON
 

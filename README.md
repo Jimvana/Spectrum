@@ -5,6 +5,10 @@ code and text stores. The CLI includes a bring-your-own-repo demo so you can
 benchmark Spectrum against a conventional raw-code retrieval store on your own
 machine.
 
+Current dictionary: v12, covering Python, HTML, JavaScript, TypeScript, CSS,
+SQL, Rust, PHP, XML/Wiki, Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and
+English text.
+
 The project converts source text into `.spec` files by mapping meaningful language tokens to stable integer IDs, run-length encoding repeated IDs, and compressing the resulting stream. Unlike a passive compressor, the stored representation keeps a searchable semantic-token layer: token IDs can be indexed directly, compared, and decoded back to the original source on demand.
 
 ## Why It Exists
@@ -51,7 +55,7 @@ available as a backwards-compatible alias.
 ## Current Status
 
 - `.spec` binary format proven with byte-for-byte round trips.
-- Dictionary v10 covers Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, English text, and XML/Wiki syntax.
+- Dictionary v12 covers Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML/Wiki, Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English text.
 - Encoders, decoders, migration tooling, and version snapshots are included.
 - Wikipedia/XML shard experiments verify large lossless corpora locally.
 - RAG storage benchmarks compare conventional raw text plus TF-IDF against `.spec` chunks plus a compact Spectrum BM25 index. Current loaders support SPB1 fixed-width postings and prefer SPB2 varint/delta postings when `postings_v2.bin` exists.
