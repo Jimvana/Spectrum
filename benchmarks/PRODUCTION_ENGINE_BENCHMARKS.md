@@ -88,9 +88,12 @@ Supported engine keys:
 | `raw_bm25` | `raw_bm25_python` | local lexical baseline |
 | `spectrum` | `spectrum_spb_bm25` | Spectrum SPB1/SPB2 BM25 |
 | `spectrum_fast` | `spectrum_spb_bm25_fast` | byte-prism Spectrum decode for code-like chunks |
+| `spectrum_native` | `spectrum_spb_bm25_native` | optional Rust byte-prism Spectrum decode |
 | `spectrum_fast_cached` | `spectrum_spb_bm25_fast_cached` | byte-prism Spectrum decode with hot payload cache |
+| `spectrum_native_cached` | `spectrum_spb_bm25_native_cached` | optional Rust byte-prism Spectrum decode with hot payload cache |
 | `spectrum_snippet` | `spectrum_snippet_sidecar` | Spectrum search with tracked snippet sidecar hydration |
 | `spectrum_serving` | `spectrum_serving_pipeline` | standard Spectrum serving flow: snippets for top-k plus cached full decode for selected result |
+| `spectrum_serving_native` | `spectrum_serving_pipeline_native` | standard Spectrum serving flow with optional Rust selected-payload decode |
 | `dense_lsa` | `dense_lsa_numpy` | local dense retrieval proxy |
 | `hybrid` | `hybrid_spectrum_dense_rrf` | Spectrum BM25 + dense LSA via reciprocal-rank fusion |
 | `faiss` | `faiss_lsa_flat` | optional FAISS flat inner-product index over local LSA vectors |
@@ -112,6 +115,44 @@ Chroma:
 ```bash
 python -m pip install chromadb
 ```
+
+Native Spectrum decoder:
+
+```bash
+python -m pip install maturin
+python -m maturin build --release --manifest-path native/spectrum_native/Cargo.toml
+python -m pip install native/spectrum_native/target/wheels/spectrum_native-*.whl
+```
+
+Then compare the Python and native byte-prism paths:
+
+```bash
+python rag/production_benchmark.py \
+  --benchmark-dir benchmarks/generated/java_corpus_commons_lang \
+  --out-dir benchmarks/generated/java_corpus_commons_lang_native_decoder_prod \
+  --engine spectrum_fast \
+  --engine spectrum_native \
+  --engine spectrum_serving \
+  --engine spectrum_serving_native \
+  --hydrate-limit 1
+```
+
+If the extension is unavailable, native engines report `skipped` rather than
+silently falling back to Python.
+
+The standard `spectrum_serving` runtime uses native selected-payload decode
+when the wheel is installed and falls back to the Python reference decoder when
+it is not. The explicit `*_native` benchmark engines are retained so Python and
+native paths can be compared side by side.
+
+Current Apache Commons Lang signal with `--hydrate-limit 1`:
+
+| Engine | Hydrate ms | E2E ms | P95 E2E ms | Hit@1 | MRR | Recall@5 |
+|---|---:|---:|---:|---:|---:|---:|
+| `spectrum_spb_bm25_fast` | 1.8571 | 2.2920 | 7.6569 | 0.4466 | 0.5670 | 0.7496 |
+| `spectrum_spb_bm25_native` | 0.3486 | 0.8055 | 1.1057 | 0.4466 | 0.5670 | 0.7496 |
+| `spectrum_serving_pipeline` | 1.0625 | 1.5007 | 5.2002 | 0.4466 | 0.5670 | 0.7496 |
+| `spectrum_serving_pipeline_native` | 0.0838 | 0.5445 | 0.8897 | 0.4466 | 0.5670 | 0.7496 |
 
 OpenSearch:
 

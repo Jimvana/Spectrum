@@ -20,8 +20,9 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from rag.codebase_benchmark import decode_code_spec_bytes_fast
+from rag.native_decoder import decode_code_spec_bytes_native_or_fast
 from rag.normalization import retrieval_token_ids
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path
 
@@ -99,6 +100,7 @@ class SpectrumServingRetriever:
         preload_specs: bool = True,
         snippet_chars: int = 600,
         title_boost: float = 0.5,
+        full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ):
         self.spectrum_store_dir = Path(spectrum_store_dir)
         docs_meta = json.loads((self.spectrum_store_dir / "docs.json").read_text(encoding="utf-8"))
@@ -117,6 +119,7 @@ class SpectrumServingRetriever:
         self.snippets_by_id = snippets_by_id
         self.snippet_chars = snippet_chars
         self.title_boost = title_boost
+        self.full_decoder = full_decoder
         self.title_index = title_token_index(self.documents) if title_boost else None
         self.bm25 = load_binary_postings(
             preferred_binary_postings_path(self.spectrum_store_dir),
@@ -132,6 +135,7 @@ class SpectrumServingRetriever:
         sidecar_path: Path | None = None,
         preload_specs: bool = True,
         title_boost: float = 0.5,
+        full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ) -> "SpectrumServingRetriever":
         benchmark_dir = Path(benchmark_dir)
         snippets_by_id = cls.load_or_build_snippets(
@@ -145,6 +149,7 @@ class SpectrumServingRetriever:
             preload_specs=preload_specs,
             snippet_chars=snippet_chars,
             title_boost=title_boost,
+            full_decoder=full_decoder,
         )
 
     @staticmethod
@@ -213,7 +218,7 @@ class SpectrumServingRetriever:
             data = self.spec_bytes.get(doc_id)
             if data is None:
                 data = self.spec_paths[doc_id].read_bytes()
-            text = decode_code_spec_bytes_fast(data)
+            text = self.full_decoder(data)
             self.decoded_cache[doc_id] = text
         return SpectrumDecodedPayload(
             id=doc_id,

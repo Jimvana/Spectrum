@@ -21,6 +21,9 @@ deck_workspace/node_modules/
 deck_workspace/scratch/
 deck_workspace/output/
 
+# Rust/native build output
+native/**/target/
+
 # Large/generated corpus data
 test data/
 wiki_enwiki_dump/

@@ -6,6 +6,29 @@
 
 ## Log
 
+### Session 24 - Native Rust Decoder Path
+**Date:** May 2026
+**What we did:**
+- Added `native/spectrum_native`, a Rust/PyO3 extension that accelerates the byte-prism decoder hot loop for code-like `.spec` chunks.
+- Added `rag/native_decoder.py` as the optional native wrapper. Python still owns dictionary/version table packing and remains the reference fallback.
+- Updated standard Spectrum serving so selected full-payload hydration uses native Rust decode when the wheel is installed, and falls back to Python when native decode is unavailable or the chunk uses the plain-text reconstruction profile.
+- Added production benchmark engine keys for `spectrum_native`, `spectrum_native_cached`, and `spectrum_serving_native`.
+- Documented the source-build path with `maturin` and the intended end-user packaging model: prebuilt wheels should include the compiled decoder, so users do not need Rust installed.
+
+**Verification:**
+- Built and installed the Windows CPython 3.11 wheel locally with `maturin build --release`.
+- Verified decode parity across the Apache Commons Lang Java benchmark corpus: 571/571 docs matched the Python reference decoder, with 536 chunks decoded natively and 35 text-profile chunks using the Python fallback.
+- Re-ran `rag/production_benchmark.py` on `benchmarks/generated/java_corpus_commons_lang` with `--hydrate-limit 1`.
+
+**Current serving signal:**
+- `spectrum_serving_pipeline`: E2E 1.5007 ms, P95 E2E 5.2002 ms, hydrate 1.0625 ms.
+- `spectrum_serving_pipeline_native`: E2E 0.5445 ms, P95 E2E 0.8897 ms, hydrate 0.0838 ms.
+- Search quality was unchanged: Hit@1 0.4466, MRR 0.5670, Recall@5 0.7496 on both serving paths.
+
+**Decision made:**
+- Treat Rust as the default runtime acceleration path when installed, not as a `.spec` format fork or hard dependency.
+- Keep Python as the compatibility/reference decoder so `.spec` remains portable on platforms without a prebuilt native wheel.
+
 ### Session 13 — Extension Library Manifests
 **Date:** April 2026
 **What we did:**

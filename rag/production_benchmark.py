@@ -30,6 +30,12 @@ from rag.ranking_eval import RawTextBM25, conventional_rank, raw_bm25_rank
 from rag.spectrum_serving import SpectrumServingRetriever, title_token_index, windowed_snippet
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path, reset_dir
 from rag.codebase_benchmark import decode_code_spec_bytes, decode_code_spec_bytes_fast
+from rag.native_decoder import (
+    NativeDecoderUnavailable,
+    decode_code_spec_bytes_native_or_fast,
+    decode_code_spec_bytes_fast_native,
+    native_decoder_available,
+)
 
 try:
     import numpy as np
@@ -41,7 +47,6 @@ except Exception as exc:  # pragma: no cover
         "This benchmark requires numpy and scikit-learn. "
         f"Import failed: {exc}"
     )
-
 
 @dataclass(frozen=True)
 class CorpusDoc:
@@ -258,6 +263,7 @@ class SpectrumBM25Engine:
         name: str = "spectrum_spb_bm25",
         cache_hydration: bool = False,
         fast_decode: bool = False,
+        native_decode: bool = False,
         preload_specs: bool = True,
         title_boost: float = 0.5,
     ):
@@ -265,10 +271,17 @@ class SpectrumBM25Engine:
         self.name = name
         self.cache_hydration = cache_hydration
         self.fast_decode = fast_decode
+        self.native_decode = native_decode
         self.preload_specs = preload_specs
         self.title_boost = title_boost
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
+        if self.native_decode and not native_decoder_available():
+            return EngineReport(
+                name=self.name,
+                status="skipped",
+                error="Native Spectrum decoder extension is not installed. Build with maturin from native/spectrum_native.",
+            )
         started = time.perf_counter()
         cpu_started = time.process_time()
         store_dir = self.benchmark_dir / "spectrum_spec"
@@ -318,11 +331,19 @@ class SpectrumBM25Engine:
                 continue
             path = self.spec_paths.get(doc_id)
             if path is not None:
-                decoder = decode_code_spec_bytes_fast if self.fast_decode else decode_code_spec_bytes
+                if self.native_decode:
+                    decoder = decode_code_spec_bytes_fast_native
+                elif self.fast_decode:
+                    decoder = decode_code_spec_bytes_fast
+                else:
+                    decoder = decode_code_spec_bytes
                 data = self.spec_bytes.get(doc_id)
                 if data is None:
                     data = path.read_bytes()
-                payload = decoder(data)
+                try:
+                    payload = decoder(data)
+                except NativeDecoderUnavailable:
+                    payload = decode_code_spec_bytes_fast(data)
                 if self.cache_hydration:
                     self.hydration_cache[doc_id] = payload
                 payloads.append(payload)
@@ -356,19 +377,33 @@ class SpectrumServingPipelineEngine:
         benchmark_dir: Path,
         name: str = "spectrum_serving_pipeline",
         preload_specs: bool = True,
+        native_decode: bool = False,
     ):
         self.benchmark_dir = benchmark_dir
         self.name = name
         self.preload_specs = preload_specs
+        self.native_decode = native_decode
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
+        if self.native_decode and not native_decoder_available():
+            return EngineReport(
+                name=self.name,
+                status="skipped",
+                error="Native Spectrum decoder extension is not installed. Build with maturin from native/spectrum_native.",
+            )
         started = time.perf_counter()
         cpu_started = time.process_time()
         sidecar_path = work_dir / "snippet_sidecar.json"
+        full_decoder = (
+            decode_code_spec_bytes_native_or_fast
+            if self.native_decode
+            else decode_code_spec_bytes_fast
+        )
         self.retriever = SpectrumServingRetriever.from_codebase_benchmark(
             self.benchmark_dir,
             sidecar_path=sidecar_path,
             preload_specs=self.preload_specs,
+            full_decoder=full_decoder,
         )
         store_bytes = dir_size(self.benchmark_dir / "spectrum_spec")
         sidecar_bytes = sidecar_path.stat().st_size if sidecar_path.exists() else 0
@@ -688,11 +723,22 @@ def make_engines(names: list[str], benchmark_dir: Path) -> list[SearchEngine]:
             name="spectrum_spb_bm25_fast",
             fast_decode=True,
         ),
+        "spectrum_native": lambda: SpectrumBM25Engine(
+            benchmark_dir,
+            name="spectrum_spb_bm25_native",
+            native_decode=True,
+        ),
         "spectrum_fast_cached": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_fast_cached",
             cache_hydration=True,
             fast_decode=True,
+        ),
+        "spectrum_native_cached": lambda: SpectrumBM25Engine(
+            benchmark_dir,
+            name="spectrum_spb_bm25_native_cached",
+            cache_hydration=True,
+            native_decode=True,
         ),
         "spectrum_fast_ram": lambda: SpectrumBM25Engine(
             benchmark_dir,
@@ -709,6 +755,11 @@ def make_engines(names: list[str], benchmark_dir: Path) -> list[SearchEngine]:
         ),
         "spectrum_snippet": lambda: SpectrumSnippetSidecarEngine(benchmark_dir),
         "spectrum_serving": lambda: SpectrumServingPipelineEngine(benchmark_dir),
+        "spectrum_serving_native": lambda: SpectrumServingPipelineEngine(
+            benchmark_dir,
+            name="spectrum_serving_pipeline_native",
+            native_decode=True,
+        ),
         "spectrum_serving_ram": lambda: SpectrumServingPipelineEngine(
             benchmark_dir,
             name="spectrum_serving_pipeline_ram",
@@ -824,7 +875,7 @@ def main() -> int:
         "--engine",
         action="append",
         default=[],
-        help="Engine to run. Repeatable. Choices: tfidf, raw_bm25, spectrum, spectrum_cached, spectrum_fast, spectrum_fast_cached, spectrum_fast_ram, spectrum_fast_ram_cached, spectrum_snippet, spectrum_serving, spectrum_serving_ram, dense_lsa, faiss, chroma, hybrid, opensearch, zoekt, lucene.",
+        help="Engine to run. Repeatable. Choices: tfidf, raw_bm25, spectrum, spectrum_cached, spectrum_fast, spectrum_native, spectrum_fast_cached, spectrum_native_cached, spectrum_fast_ram, spectrum_fast_ram_cached, spectrum_snippet, spectrum_serving, spectrum_serving_native, spectrum_serving_ram, dense_lsa, faiss, chroma, hybrid, opensearch, zoekt, lucene.",
     )
     parser.add_argument(
         "--hydrate-limit",

@@ -141,6 +141,7 @@ The gap vs gzip (~15–21%) is the cost of the semantic token layer. It's not a 
 /Spectrum Algo
   /encoder            # encoder.py — source → PNG (original approach, still works)
   /decoder            # decoder.py — PNG → source (original approach)
+  /native             # optional Rust/PyO3 decoder acceleration
   /spec_format        # spec_encoder.py, spec_decoder.py — .spec binary format
     /_frozen          # frozen dictionary snapshots (one integer per version)
       v7.py           # SPEC_TOKEN_COUNT = 234,702
@@ -210,10 +211,33 @@ Each time the dictionary is bumped to a new version, a snapshot of the core enco
 ## Tech Stack
 
 - **Language:** Python 3
+- **Native acceleration:** optional Rust/PyO3 byte-prism decoder for selected-payload serving; Python remains the reference and fallback decoder
 - **Compression:** zlib (level 9), RLE on token ID stream
 - **Dictionary:** v12 — 235,021 SPEC tokens across Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML/Wiki, Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English plain text
 - **Backwards compatibility:** all `.spec` files from v7 onwards are decodable; frozen snapshot system stores one integer per historical version
 - **No external ML dependencies** — Spectrum is self-contained
+
+### Runtime Decode Pipeline
+
+The `.spec` file format has not changed. The standard serving path accelerates
+the selected-payload hydration step when the native wheel is installed:
+
+```
+query
+  -> retrieval token IDs
+  -> Spectrum BM25 over SPB2 postings
+  -> path/title/snippet sidecars for the result list
+  -> selected .spec bytes from RAM
+  -> Rust byte-prism decode when available
+  -> Python reference decode fallback for unsupported profiles or missing wheel
+```
+
+The Rust path handles the hot loop for code-like chunks: zlib inflate of the
+uint32 ID stream, RLE/Unicode marker handling, token ID to UTF-8 bytes lookup,
+and output assembly. Plain text chunks continue to use the Python text
+reconstructor until that state machine is ported. This keeps `.spec` portable:
+end users install a prebuilt wheel and do not need Rust; source builds and CI
+use `maturin` against `native/spectrum_native/Cargo.toml`.
 
 ---
 

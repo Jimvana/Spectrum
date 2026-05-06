@@ -59,7 +59,7 @@ available as a backwards-compatible alias.
 - Encoders, decoders, migration tooling, and version snapshots are included.
 - Wikipedia/XML shard experiments verify large lossless corpora locally.
 - RAG storage benchmarks compare conventional raw text plus TF-IDF against `.spec` chunks plus a compact Spectrum BM25 index. Current loaders support SPB1 fixed-width postings and prefer SPB2 varint/delta postings when `postings_v2.bin` exists.
-- The standard Spectrum serving path now preloads `.spec` payload bytes into RAM, serves query-windowed snippet sidecars for result lists, and byte-prism decodes the selected full payload on demand.
+- The standard Spectrum serving path now preloads `.spec` payload bytes into RAM, serves query-windowed snippet sidecars for result lists, and byte-prism decodes the selected full payload on demand. When the optional native Rust decoder wheel is installed, that selected-payload decode is the default fast path; otherwise Spectrum falls back to the Python reference decoder.
 
 Current 120-page Wikipedia sample signal with 6k-character chunks:
 
@@ -109,13 +109,17 @@ Current Java production-serving signal on Apache Commons Lang:
 | Raw TF-IDF | 0.647 | 0.886 | 0.163 | 0.236 | 0.366 | 0.629 | n/a in production runner |
 | Raw BM25 | 1.576 | 2.348 | 0.284 | 0.392 | 0.569 | 1.478 | n/a in production runner |
 | Spectrum serving | 1.594 | 5.492 | 0.447 | 0.567 | 0.750 | 1.587 | 2,958,855 |
+| Spectrum serving + native decode | 0.545 | 0.890 | 0.447 | 0.567 | 0.750 | 0.520 | 2,958,855 |
 | Dense LSA | 14.048 | 15.125 | 0.166 | 0.231 | 0.349 | 13.381 | 1,169,408 |
 | Hybrid Spectrum+LSA | 16.497 | 19.723 | 0.284 | 0.408 | 0.618 | 15.871 | 3,772,846 |
 
 The Java production run used 571 files/chunks from Apache Commons Lang and 571
 generated file/path queries. The storage builder reported 8,975,222 raw chunk
 bytes, 10,496,085 bytes for conventional raw+TF-IDF, and 2,603,438 bytes for
-Spectrum `.spec`+SPB2 BM25 before serving snippets. Optional FAISS, Chroma,
+Spectrum `.spec`+SPB2 BM25 before serving snippets. The native Rust decoder
+preserved identical Hit@1/MRR/Recall@5 and byte-for-byte parity across the 571
+chunk corpus, with 536 code-like chunks decoded natively and 35 text-profile
+chunks using the Python fallback reconstructor. Optional FAISS, Chroma,
 OpenSearch, Zoekt, and Lucene/Pyserini adapters were skipped on this machine
 because their dependencies or services were not installed.
 
@@ -144,7 +148,31 @@ Unknown characters fall back to ASCII or Unicode marker IDs, so decoding remains
 | Component | What it answers | Cost |
 |---|---|---|
 | Spectrum snippets | “What are the likely top results, and what preview text should I show?” | Very fast; tiny hydration cost because it reads short snippet sidecars instead of decoding full `.spec` payloads. |
-| Spectrum serving | “Give me previews, and when the user or agent chooses a result, give me the exact full source text.” | Slightly slower because it uses snippets for the result list, then decodes one selected full `.spec` payload on demand and caches it. |
+| Spectrum serving | “Give me previews, and when the user or agent chooses a result, give me the exact full source text.” | Uses snippets for the result list, then decodes one selected full `.spec` payload on demand and caches it. Native Rust byte-prism decode is used when installed; Python remains the compatibility/reference fallback. |
+
+## Native Decoder
+
+The `.spec` format itself is still the same portable 16-byte header plus
+zlib-compressed uint32 token stream. The Rust decoder is a runtime acceleration
+path, not a format fork.
+
+Runtime behavior:
+
+```text
+selected .spec bytes already in RAM
+  -> native Rust byte-prism decode if the wheel is installed
+  -> Python reference decoder fallback if native decode is unavailable
+```
+
+End users do not need Rust installed when prebuilt wheels are published. Rust
+and `maturin` are only needed by developers or CI machines that build the
+native extension from source:
+
+```powershell
+python -m pip install maturin
+python -m maturin build --release --manifest-path native\spectrum_native\Cargo.toml
+python -m pip install native\spectrum_native\target\wheels\spectrum_native-*.whl
+```
 
 
 ## Repository Layout
@@ -158,6 +186,7 @@ rag/                 Retrieval and storage benchmark harnesses
 tools/               Wikipedia verification, indexing, and read tools
 versions/            Versioned snapshots of the encoding stack
 Runtime/             Runtime planning and implementation notes
+native/              Optional Rust/PyO3 decoder acceleration
 ```
 
 Large Wikipedia dumps, generated benchmark stores, `.spec` outputs, caches, and local artifacts are intentionally ignored by Git.
