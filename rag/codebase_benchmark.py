@@ -411,6 +411,20 @@ def collect_source_files(root: Path, max_file_bytes: int, exclude_dirs: set[str]
     return sorted(files)
 
 
+def supported_extensions_text() -> str:
+    return ", ".join(sorted(LANG_BY_EXT))
+
+
+def progress_interval(total: int) -> int:
+    if total <= 100:
+        return 25
+    if total <= 1_000:
+        return 100
+    if total <= 10_000:
+        return 500
+    return 1_000
+
+
 def make_code_chunks(
     root: Path,
     paths: list[Path],
@@ -475,8 +489,9 @@ def build_spectrum_code_store(
     postings: dict[int, list[tuple[int, int]]] = {}
     total_tokens = 0
     fidelity_failures = []
+    interval = progress_interval(len(chunks))
 
-    for chunk in chunks:
+    for index, chunk in enumerate(chunks, start=1):
         data, dict_ids = encode_code_to_spec_bytes(chunk)
         spec_path = chunk_dir / f"chunk_{chunk.id:06d}.spec"
         spec_path.write_bytes(data)
@@ -499,13 +514,20 @@ def build_spectrum_code_store(
         })
         for token_id, count in freq.items():
             postings.setdefault(token_id, []).append((chunk.id, count))
+        if index == len(chunks) or index % interval == 0:
+            print(
+                f"[codebase-bench] Spectrum encoded {index:,}/{len(chunks):,} chunks",
+                flush=True,
+            )
 
     avg_doc_length = total_tokens / len(documents) if documents else 0.0
     written_index_formats = []
     if postings_format in {"v1", "both"}:
+        print("[codebase-bench] writing SPB1 postings", flush=True)
         write_binary_postings(out_dir / "postings.bin", documents, postings, avg_doc_length)
         written_index_formats.append("SPB1")
     if postings_format in {"v2", "both"}:
+        print("[codebase-bench] writing SPB2 postings", flush=True)
         write_binary_postings_v2(out_dir / "postings_v2.bin", documents, postings, avg_doc_length)
         written_index_formats.append("SPB2")
     (out_dir / "docs.json").write_text(
@@ -691,15 +713,37 @@ def run(args: argparse.Namespace) -> dict:
     exclude_dirs = DEFAULT_EXCLUDE_DIRS.union(
         item.strip() for item in args.exclude_dir if item.strip()
     )
+    print(f"[codebase-bench] scanning {source_root}", flush=True)
     paths = collect_source_files(source_root, args.max_file_bytes, exclude_dirs)
     if args.max_files:
         paths = paths[: args.max_files]
+    if not paths:
+        raise SystemExit(
+            "No supported source files found under "
+            f"{source_root}. Supported extensions: {supported_extensions_text()}. "
+            "If you entered a Git repo URL, choose a new empty clone path or an existing "
+            "checkout of that repository."
+        )
+    print(f"[codebase-bench] found {len(paths):,} supported source files", flush=True)
+    print("[codebase-bench] building source chunks", flush=True)
     chunks = make_code_chunks(source_root, paths, args.chunk_chars, args.overlap_chars)
+    if not chunks:
+        raise SystemExit(
+            f"No benchmark chunks could be built from {len(paths):,} source files under "
+            f"{source_root}."
+        )
     raw_bytes = sum(len(chunk.text.encode("utf-8")) for chunk in chunks)
+    print(
+        f"[codebase-bench] corpus: {len(paths):,} files, {len(chunks):,} chunks, "
+        f"{raw_bytes:,} bytes",
+        flush=True,
+    )
 
     conventional_dir = out_dir / "conventional_tfidf"
     spectrum_dir = out_dir / "spectrum_spec"
+    print("[codebase-bench] building conventional raw+TF-IDF store", flush=True)
     conventional_meta, vectorizer, matrix = build_conventional_store(chunks, conventional_dir)
+    print("[codebase-bench] building Spectrum .spec+BM25 store", flush=True)
     spectrum_meta, documents, bm25 = build_spectrum_code_store(
         chunks,
         spectrum_dir,
@@ -711,6 +755,7 @@ def run(args: argparse.Namespace) -> dict:
 
     queries = make_file_queries(chunks, args.queries)
     (out_dir / "queries.json").write_text(json.dumps(queries, indent=2), encoding="utf-8")
+    print(f"[codebase-bench] evaluating {len(queries):,} generated queries", flush=True)
     retrieval = evaluate(
         queries,
         conventional=(vectorizer, matrix),

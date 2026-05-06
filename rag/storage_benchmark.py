@@ -241,6 +241,7 @@ def build_conventional_store(chunks: list[Chunk], out_dir: Path) -> tuple[dict, 
     cpu_started = time.process_time()
 
     records_path = out_dir / "chunks.jsonl"
+    print(f"[storage-bench] writing {len(chunks):,} raw chunks", flush=True)
     with records_path.open("w", encoding="utf-8") as f:
         for chunk in chunks:
             f.write(json.dumps(chunk.__dict__, ensure_ascii=False) + "\n")
@@ -252,7 +253,9 @@ def build_conventional_store(chunks: list[Chunk], out_dir: Path) -> tuple[dict, 
         max_features=100_000,
         norm="l2",
     )
+    print("[storage-bench] fitting raw TF-IDF matrix", flush=True)
     matrix = vectorizer.fit_transform(documents)
+    print(f"[storage-bench] raw TF-IDF features: {matrix.shape[1]:,}", flush=True)
     sparse.save_npz(out_dir / "tfidf_matrix.npz", matrix, compressed=True)
     vocabulary = {term: int(index) for term, index in vectorizer.vocabulary_.items()}
     (out_dir / "tfidf_vocabulary.json").write_text(

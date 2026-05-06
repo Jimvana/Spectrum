@@ -99,6 +99,22 @@ def collect_interactive_queries() -> list[str]:
 def clone_or_use_repo(repo_url: str, target: Path, interactive: bool) -> Path:
     target = target.expanduser().resolve()
     if target.exists():
+        is_empty = not any(target.iterdir())
+        if is_empty:
+            if interactive and not prompt_yes_no(f"{target} already exists and is empty. Clone into it"):
+                raise SystemExit("Demo cancelled.")
+            print(f"[demo] cloning {repo_url} -> {target}")
+            subprocess.run(
+                ["git", "clone", "--depth=1", repo_url, str(target)],
+                check=True,
+            )
+            return target
+        if not (target / ".git").exists():
+            message = (
+                f"{target} already exists, but it is not a Git checkout. "
+                "Using it will benchmark that folder as-is instead of cloning the repo."
+            )
+            print(message)
         if interactive and not prompt_yes_no(f"{target} already exists. Use it"):
             raise SystemExit("Demo cancelled.")
         return target
