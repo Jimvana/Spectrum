@@ -60,6 +60,7 @@ Latest local benchmark signal:
   - Benchmark boost weights rather than hard-coding guesses.
   - 2026-05-01: Preliminary title boost variants are in the ranking harness. Light boost improves 6k MRR only; stronger boost hurts both runs.
   - 2026-05-01: Added `spectrum_bm25_b025_title_boost_025`. On 6k chunks it improved Spectrum Hit@1/MRR from 0.923/0.936 to 0.962/0.962, but it hurt 1.8k quality, so title boost should remain corpus/chunk-profile tuned for now.
+  - 2026-05-06: Promoted the code serving profile to `title_boost=1.0` after Java/self-file sweeps showed consistent gains for title/path-heavy generated code queries. On `java_corpus_commons_lang`, Spectrum serving improved from Hit@1/MRR/Recall@5 `0.4466/0.5670/0.7496` to `0.5692/0.6717/0.8231`.
 
 - [ ] Tune BM25 parameters for Spectrum token streams.
   - Grid-search `k1`, `b`, title boost, noisy-token weight, and query expansion weight.
@@ -70,10 +71,19 @@ Latest local benchmark signal:
   - 2026-05-02: Ran 800-variant sweeps on the current verified Wiki stores. On 6k chunks, the best quality variant matched conventional Hit@1/Recall@5 but still trailed MRR (`k1=1.8`, `b=0`, no DF filter, title boost `0.5`). On 1.8k chunks, multiple DF50/title-boost variants matched conventional Hit@1/MRR/Recall@5 and were slightly faster than conventional TF-IDF.
   - 2026-05-02: Fixed generated query creation so `--queries N` continues past duplicate page titles and returns the requested count when enough unique titles exist.
   - 2026-05-02: Labelled human-query sweeps prefer `k1=2.1`, `b=1`, and DF50. This differs from the generated-query winners and confirms that generated queries should not set profile defaults alone.
+  - 2026-05-06: Added explicit serving-time BM25 knobs for binary postings loads and production serving. The code serving default now uses sweep-backed `k1=1.2`, `b=0.75`, no query-time DF filter, and `title_boost=1.0`; self-file sweeps preferred lower `b=0.25`, so keep `b` profile-configurable.
 
 - [ ] Add phrase/proximity scoring.
   - Store enough positional information, or compact token windows, to reward query terms that occur near each other.
   - Compare size impact against ranking improvement.
+  - 2026-05-06: Added a serving-time top-50 code reranker with cheap identifier-position proximity scoring over the candidate sidecar text. This avoids changing the `.spec` payload or postings format while testing the ranking signal.
+
+- [~] Add code-aware candidate reranking.
+  - Run fast Spectrum BM25 over compact postings to get the top 50 candidates.
+  - Rerank candidates with path, filename, identifier, structural declaration/import, and proximity signals.
+  - Keep the reranker sidecar separate from the lossless `.spec` payload.
+  - 2026-05-06: Added `CodeSignalReranker` and wired it into production Spectrum serving. On `java_corpus_commons_lang`, Spectrum serving improved from Hit@1/MRR/Recall@5 `0.5692/0.6717/0.8231` to `0.8284/0.8758/0.9370`. On `conventional_vs_spectrum_all_queries`, it improved from `0.3107/0.3780/0.4964` to `0.8679/0.8979/0.9357`.
+  - 2026-05-06: Added runtime profiles: `off`, `fast` (top 10), `balanced` (top 25), and `accurate`/`quality` (top 50), plus a direct candidate-count override for benchmark experiments.
 
 - [ ] Create a human-style labelled query set.
   - Include natural questions and keyword queries, not only generated title/content queries.

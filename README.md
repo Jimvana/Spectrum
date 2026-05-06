@@ -103,7 +103,7 @@ The project currently focuses on:
 * retrieval-aware compression,
 * and production-shaped benchmark pipelines for large code corpora.
 
-* ## Try The Demo
+## Try The Demo
 
 Install or update the local CLI from this checkout:
 
@@ -154,4 +154,46 @@ The current serving pipeline supports:
 * and optional native Rust byte-prism decoding.
 
 Use `spectrum` for the public CLI command. The older `spec` command remains available as a backwards-compatible alias.
+
+---
+
+## Code Reranking Profiles
+
+Code search can run Spectrum BM25 first, then rerank a bounded candidate set
+with code-aware sidecar signals: path parts, filename parts, identifiers,
+function/class/export/import names, and cheap proximity matches.
+
+The production benchmark exposes this with `--spectrum-rerank`:
+
+| Profile | Candidate rerank depth | Intended use |
+|---|---:|---|
+| `off` | 0 | Lowest retrieval work; BM25 only. |
+| `fast` | 10 | Latency-sensitive searches where some quality loss is acceptable. |
+| `balanced` | 25 | Middle ground for interactive search. |
+| `accurate` | 50 | Highest quality default. |
+| `quality` | 50 | Backwards-compatible alias for `accurate`. |
+
+You can override the profile depth directly:
+
+```powershell
+python rag\production_benchmark.py `
+  --benchmark-dir benchmarks\generated\conventional_vs_spectrum_all_queries `
+  --engine spectrum_serving `
+  --spectrum-rerank accurate `
+  --spectrum-rerank-candidates 35 `
+  --hydrate-limit 1
+```
+
+Recent local code-search signal:
+
+| Corpus | Profile | Hit@1 | MRR | Recall@5 | Avg E2E ms |
+|---|---|---:|---:|---:|---:|
+| Apache Commons Lang | `accurate` / top-50 | 0.828 | 0.876 | 0.937 | 4.401 |
+| Apache Commons Lang | `balanced` / top-25 | 0.820 | 0.866 | 0.925 | 4.118 |
+| Self-files | `accurate` / top-50 | 0.868 | 0.898 | 0.936 | 3.477 |
+| Self-files | `balanced` / top-25 | 0.807 | 0.831 | 0.861 | 2.482 |
+
+All timings are milliseconds. These runs used small generated-query code
+benchmarks, so treat them as a profile tuning signal rather than a large-scale
+production claim.
 

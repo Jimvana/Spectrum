@@ -27,11 +27,167 @@ from rag.normalization import retrieval_token_ids
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path
 
 _SNIPPET_TERM_RE = re.compile(r"[A-Za-z0-9_]{2,}")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
+_SPLIT_RE = re.compile(r"[_\-.\\/]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_FUNCTION_RE = re.compile(
+    r"\b(?:def|function|func|fn|class|interface|type|struct|enum|const|let|var|export\s+(?:default\s+)?)\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+_IMPORT_RE = re.compile(r"\b(?:import|from|require)\b[^\"'\n]*[\"']([^\"']+)[\"']")
+DEFAULT_SERVING_K1 = 1.2
+DEFAULT_SERVING_B = 0.75
+DEFAULT_SERVING_MAX_DF_RATIO = None
+DEFAULT_SERVING_TITLE_BOOST = 1.0
+DEFAULT_RERANK_CANDIDATES = 50
+DEFAULT_IDENTIFIER_BOOST = 0.9
+DEFAULT_PATH_BOOST = 1.2
+DEFAULT_STRUCTURE_BOOST = 1.5
+DEFAULT_PROXIMITY_BOOST = 0.6
 
 
 def _snippet_terms(query: str) -> list[str]:
     terms = [term.lower() for term in _SNIPPET_TERM_RE.findall(query)]
     return list(dict.fromkeys(term for term in terms if len(term) >= 2))
+
+
+def _split_code_words(value: str) -> list[str]:
+    words: list[str] = []
+    for ident in _IDENT_RE.findall(value):
+        for part in _SPLIT_RE.split(ident):
+            part = part.strip().lower()
+            if len(part) >= 2 and not part.isdigit():
+                words.append(part)
+    return list(dict.fromkeys(words))
+
+
+def _term_positions(text: str) -> dict[str, list[int]]:
+    positions: dict[str, list[int]] = {}
+    for idx, match in enumerate(_IDENT_RE.finditer(text)):
+        for word in _split_code_words(match.group(0)):
+            rows = positions.setdefault(word, [])
+            if len(rows) < 8:
+                rows.append(idx)
+    return positions
+
+
+def _field_tokens(document: dict, text: str) -> dict[str, set[str]]:
+    source_path = str(document.get("source_path", document.get("title", "")))
+    path = Path(source_path)
+    path_text = " ".join((*path.parts, path.stem))
+    identifier_words = _split_code_words(text)
+    structural_text = " ".join(
+        [match.group(1) for match in _FUNCTION_RE.finditer(text)]
+        + [match.group(1) for match in _IMPORT_RE.finditer(text)]
+    )
+    return {
+        "path": set(_split_code_words(path_text)),
+        "filename": set(_split_code_words(path.stem)),
+        "identifier": set(identifier_words),
+        "structure": set(_split_code_words(structural_text)),
+    }
+
+
+@dataclass(frozen=True)
+class CodeRerankProfile:
+    candidates: int = DEFAULT_RERANK_CANDIDATES
+    identifier_boost: float = DEFAULT_IDENTIFIER_BOOST
+    path_boost: float = DEFAULT_PATH_BOOST
+    structure_boost: float = DEFAULT_STRUCTURE_BOOST
+    proximity_boost: float = DEFAULT_PROXIMITY_BOOST
+
+
+def code_rerank_profile(name: str, candidates: int | None = None) -> CodeRerankProfile | None:
+    profiles = {
+        "off": None,
+        "none": None,
+        "fast": CodeRerankProfile(candidates=10),
+        "balanced": CodeRerankProfile(candidates=25),
+        "accurate": CodeRerankProfile(candidates=50),
+        "quality": CodeRerankProfile(candidates=50),
+    }
+    key = name.lower()
+    if key not in profiles:
+        raise ValueError(f"Unknown code rerank profile: {name}")
+    profile = profiles[key]
+    if candidates is None:
+        return profile
+    if candidates <= 0:
+        return None
+    if profile is None:
+        return CodeRerankProfile(candidates=candidates)
+    return CodeRerankProfile(
+        candidates=candidates,
+        identifier_boost=profile.identifier_boost,
+        path_boost=profile.path_boost,
+        structure_boost=profile.structure_boost,
+        proximity_boost=profile.proximity_boost,
+    )
+
+
+class CodeSignalReranker:
+    def __init__(
+        self,
+        documents: list[dict],
+        text_by_id: dict[int, str],
+        profile: CodeRerankProfile = CodeRerankProfile(),
+    ):
+        self.profile = profile
+        self.fields_by_id: dict[int, dict[str, set[str]]] = {}
+        self.positions_by_id: dict[int, dict[str, list[int]]] = {}
+        for doc in documents:
+            doc_id = int(doc["id"])
+            text = text_by_id.get(doc_id, "")
+            self.fields_by_id[doc_id] = _field_tokens(doc, text)
+            self.positions_by_id[doc_id] = _term_positions(text)
+
+    def score(self, doc_id: int, query_terms: set[str]) -> float:
+        fields = self.fields_by_id.get(doc_id)
+        if not fields or not query_terms:
+            return 0.0
+
+        score = 0.0
+        score += self.profile.path_boost * len(query_terms & fields["path"])
+        score += self.profile.path_boost * 0.5 * len(query_terms & fields["filename"])
+        score += self.profile.identifier_boost * len(query_terms & fields["identifier"])
+        score += self.profile.structure_boost * len(query_terms & fields["structure"])
+        score += self.proximity_score(doc_id, query_terms)
+        return score
+
+    def proximity_score(self, doc_id: int, query_terms: set[str]) -> float:
+        positions = self.positions_by_id.get(doc_id, {})
+        matched_positions = [
+            pos
+            for term in query_terms
+            for pos in positions.get(term, ())
+        ]
+        if len(matched_positions) < 2:
+            return 0.0
+        matched_positions.sort()
+        best_span = min(
+            matched_positions[idx + 1] - matched_positions[idx]
+            for idx in range(len(matched_positions) - 1)
+        )
+        if best_span <= 3:
+            return self.profile.proximity_boost
+        if best_span <= 12:
+            return self.profile.proximity_boost * 0.5
+        return 0.0
+
+    def rerank(
+        self,
+        ranked_doc_ids: list[int],
+        query: str,
+        base_weight: float = 0.01,
+        top_k: int = 5,
+    ) -> list[int]:
+        query_terms = set(_split_code_words(query) or _snippet_terms(query))
+        if not query_terms:
+            return ranked_doc_ids[:top_k]
+        scored = []
+        for rank, doc_id in enumerate(ranked_doc_ids, start=1):
+            score = self.score(doc_id, query_terms) + base_weight * (len(ranked_doc_ids) - rank)
+            scored.append((doc_id, score))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [doc_id for doc_id, score in scored[:top_k]]
 
 
 def windowed_snippet(text: str, query: str, limit: int) -> str:
@@ -99,7 +255,11 @@ class SpectrumServingRetriever:
         snippets_by_id: dict[int, str],
         preload_specs: bool = True,
         snippet_chars: int = 600,
-        title_boost: float = 0.5,
+        k1: float = DEFAULT_SERVING_K1,
+        b: float = DEFAULT_SERVING_B,
+        max_df_ratio: float | None = DEFAULT_SERVING_MAX_DF_RATIO,
+        title_boost: float = DEFAULT_SERVING_TITLE_BOOST,
+        rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ):
         self.spectrum_store_dir = Path(spectrum_store_dir)
@@ -118,12 +278,20 @@ class SpectrumServingRetriever:
             }
         self.snippets_by_id = snippets_by_id
         self.snippet_chars = snippet_chars
+        self.max_df_ratio = max_df_ratio
         self.title_boost = title_boost
         self.full_decoder = full_decoder
         self.title_index = title_token_index(self.documents) if title_boost else None
+        self.reranker = (
+            CodeSignalReranker(self.documents, snippets_by_id, rerank_profile)
+            if rerank_profile and rerank_profile.candidates > 0
+            else None
+        )
         self.bm25 = load_binary_postings(
             preferred_binary_postings_path(self.spectrum_store_dir),
             self.documents,
+            k1=k1,
+            b=b,
         )
         self.decoded_cache: dict[int, str] = {}
 
@@ -134,7 +302,11 @@ class SpectrumServingRetriever:
         snippet_chars: int = 600,
         sidecar_path: Path | None = None,
         preload_specs: bool = True,
-        title_boost: float = 0.5,
+        k1: float = DEFAULT_SERVING_K1,
+        b: float = DEFAULT_SERVING_B,
+        max_df_ratio: float | None = DEFAULT_SERVING_MAX_DF_RATIO,
+        title_boost: float = DEFAULT_SERVING_TITLE_BOOST,
+        rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ) -> "SpectrumServingRetriever":
         benchmark_dir = Path(benchmark_dir)
@@ -148,7 +320,11 @@ class SpectrumServingRetriever:
             snippets_by_id=snippets_by_id,
             preload_specs=preload_specs,
             snippet_chars=snippet_chars,
+            k1=k1,
+            b=b,
+            max_df_ratio=max_df_ratio,
             title_boost=title_boost,
+            rerank_profile=rerank_profile,
             full_decoder=full_decoder,
         )
 
@@ -181,13 +357,18 @@ class SpectrumServingRetriever:
         return snippets
 
     def search(self, query: str, top_k: int = 5) -> list[SpectrumSearchResult]:
+        candidate_count = max(top_k, self.reranker.profile.candidates if self.reranker else top_k)
         doc_ids = self.bm25.search(
             retrieval_token_ids(query),
-            top_k,
-            max_df_ratio=0.9,
+            candidate_count,
+            max_df_ratio=self.max_df_ratio,
             title_index=self.title_index,
             title_boost=self.title_boost,
         )
+        if self.reranker:
+            doc_ids = self.reranker.rerank(doc_ids, query, top_k=top_k)
+        else:
+            doc_ids = doc_ids[:top_k]
         results = []
         for rank, doc_id in enumerate(doc_ids, start=1):
             doc = self.docs_by_id.get(doc_id)

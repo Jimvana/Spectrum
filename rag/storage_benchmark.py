@@ -450,6 +450,8 @@ def load_binary_postings_v1(
     path: Path,
     documents: list[dict],
     raw: bytes | None = None,
+    k1: float = 1.5,
+    b: float = 0.75,
 ) -> BinarySpectrumBM25:
     if raw is None:
         raw = path.read_bytes()
@@ -484,13 +486,15 @@ def load_binary_postings_v1(
             rows.append((doc_id, tf))
         postings[token_id] = rows
 
-    return BinarySpectrumBM25(documents, postings, avg_doc_length)
+    return BinarySpectrumBM25(documents, postings, avg_doc_length, k1=k1, b=b)
 
 
 def load_binary_postings_v2(
     path: Path,
     documents: list[dict],
     raw: bytes | None = None,
+    k1: float = 1.5,
+    b: float = 0.75,
 ) -> BinarySpectrumBM25:
     if raw is None:
         raw = path.read_bytes()
@@ -525,16 +529,21 @@ def load_binary_postings_v2(
             raise ValueError(f"SPB2 postings list for token {token_id} has trailing bytes")
         postings[token_id] = rows
 
-    return BinarySpectrumBM25(documents, postings, avg_doc_length)
+    return BinarySpectrumBM25(documents, postings, avg_doc_length, k1=k1, b=b)
 
 
-def load_binary_postings(path: Path, documents: list[dict]) -> BinarySpectrumBM25:
+def load_binary_postings(
+    path: Path,
+    documents: list[dict],
+    k1: float = 1.5,
+    b: float = 0.75,
+) -> BinarySpectrumBM25:
     raw = path.read_bytes()
     magic = raw[:4]
     if magic == BINARY_INDEX_MAGIC:
-        return load_binary_postings_v1(path, documents, raw)
+        return load_binary_postings_v1(path, documents, raw, k1=k1, b=b)
     if magic == BINARY_INDEX_MAGIC_V2:
-        return load_binary_postings_v2(path, documents, raw)
+        return load_binary_postings_v2(path, documents, raw, k1=k1, b=b)
     raise ValueError(f"Not a Spectrum binary postings index: {path}")
 
 

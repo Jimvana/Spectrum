@@ -27,7 +27,18 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from rag.ranking_eval import RawTextBM25, conventional_rank, raw_bm25_rank
-from rag.spectrum_serving import SpectrumServingRetriever, title_token_index, windowed_snippet
+from rag.spectrum_serving import (
+    CodeRerankProfile,
+    CodeSignalReranker,
+    DEFAULT_SERVING_B,
+    DEFAULT_SERVING_K1,
+    DEFAULT_SERVING_MAX_DF_RATIO,
+    DEFAULT_SERVING_TITLE_BOOST,
+    SpectrumServingRetriever,
+    code_rerank_profile,
+    title_token_index,
+    windowed_snippet,
+)
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path, reset_dir
 from rag.codebase_benchmark import decode_code_spec_bytes, decode_code_spec_bytes_fast
 from rag.native_decoder import (
@@ -265,7 +276,11 @@ class SpectrumBM25Engine:
         fast_decode: bool = False,
         native_decode: bool = False,
         preload_specs: bool = True,
-        title_boost: float = 0.5,
+        k1: float = DEFAULT_SERVING_K1,
+        b: float = DEFAULT_SERVING_B,
+        max_df_ratio: float | None = DEFAULT_SERVING_MAX_DF_RATIO,
+        title_boost: float = DEFAULT_SERVING_TITLE_BOOST,
+        rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
     ):
         self.benchmark_dir = benchmark_dir
         self.name = name
@@ -273,7 +288,11 @@ class SpectrumBM25Engine:
         self.fast_decode = fast_decode
         self.native_decode = native_decode
         self.preload_specs = preload_specs
+        self.k1 = k1
+        self.b = b
+        self.max_df_ratio = max_df_ratio
         self.title_boost = title_boost
+        self.rerank_profile = rerank_profile
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
         if self.native_decode and not native_decoder_available():
@@ -293,6 +312,12 @@ class SpectrumBM25Engine:
         }
         self.hydration_cache: dict[int, str] = {}
         self.title_index = title_token_index(docs_meta["documents"]) if self.title_boost else None
+        text_by_id = {doc.id: doc.text for doc in docs}
+        self.reranker = (
+            CodeSignalReranker(docs_meta["documents"], text_by_id, self.rerank_profile)
+            if self.rerank_profile and self.rerank_profile.candidates > 0
+            else None
+        )
         self.spec_bytes: dict[int, bytes] = {}
         if self.preload_specs:
             self.spec_bytes = {
@@ -302,6 +327,8 @@ class SpectrumBM25Engine:
         self.bm25 = load_binary_postings(
             preferred_binary_postings_path(store_dir),
             docs_meta["documents"],
+            k1=self.k1,
+            b=self.b,
         )
         return EngineReport(
             name=self.name,
@@ -315,13 +342,17 @@ class SpectrumBM25Engine:
         from rag.normalization import retrieval_token_ids
 
         self.last_query = query
-        return self.bm25.search(
+        candidate_count = max(top_k, self.reranker.profile.candidates if self.reranker else top_k)
+        doc_ids = self.bm25.search(
             retrieval_token_ids(query),
-            top_k,
-            max_df_ratio=0.9,
+            candidate_count,
+            max_df_ratio=self.max_df_ratio,
             title_index=self.title_index,
             title_boost=self.title_boost,
         )
+        if self.reranker:
+            return self.reranker.rerank(doc_ids, query, top_k=top_k)
+        return doc_ids[:top_k]
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         payloads = []
@@ -351,8 +382,17 @@ class SpectrumBM25Engine:
 
 
 class SpectrumSnippetSidecarEngine(SpectrumBM25Engine):
-    def __init__(self, benchmark_dir: Path, snippet_chars: int = 600):
-        super().__init__(benchmark_dir, name="spectrum_snippet_sidecar")
+    def __init__(
+        self,
+        benchmark_dir: Path,
+        snippet_chars: int = 600,
+        rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
+    ):
+        super().__init__(
+            benchmark_dir,
+            name="spectrum_snippet_sidecar",
+            rerank_profile=rerank_profile,
+        )
         self.snippet_chars = snippet_chars
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
@@ -378,11 +418,13 @@ class SpectrumServingPipelineEngine:
         name: str = "spectrum_serving_pipeline",
         preload_specs: bool = True,
         native_decode: bool = False,
+        rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
     ):
         self.benchmark_dir = benchmark_dir
         self.name = name
         self.preload_specs = preload_specs
         self.native_decode = native_decode
+        self.rerank_profile = rerank_profile
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
         if self.native_decode and not native_decoder_available():
@@ -403,6 +445,7 @@ class SpectrumServingPipelineEngine:
             self.benchmark_dir,
             sidecar_path=sidecar_path,
             preload_specs=self.preload_specs,
+            rerank_profile=self.rerank_profile,
             full_decoder=full_decoder,
         )
         store_bytes = dir_size(self.benchmark_dir / "spectrum_spec")
@@ -708,43 +751,53 @@ class PyseriniLuceneEngine:
         return []
 
 
-def make_engines(names: list[str], benchmark_dir: Path) -> list[SearchEngine]:
+def make_engines(
+    names: list[str],
+    benchmark_dir: Path,
+    rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
+) -> list[SearchEngine]:
     factories = {
         "tfidf": lambda: TfidfEngine(),
         "raw_bm25": lambda: RawBM25Engine(),
-        "spectrum": lambda: SpectrumBM25Engine(benchmark_dir),
+        "spectrum": lambda: SpectrumBM25Engine(benchmark_dir, rerank_profile=rerank_profile),
         "spectrum_cached": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_cached",
             cache_hydration=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_fast": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_fast",
             fast_decode=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_native": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_native",
             native_decode=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_fast_cached": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_fast_cached",
             cache_hydration=True,
             fast_decode=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_native_cached": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_native_cached",
             cache_hydration=True,
             native_decode=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_fast_ram": lambda: SpectrumBM25Engine(
             benchmark_dir,
             name="spectrum_spb_bm25_fast_ram",
             fast_decode=True,
             preload_specs=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_fast_ram_cached": lambda: SpectrumBM25Engine(
             benchmark_dir,
@@ -752,23 +805,35 @@ def make_engines(names: list[str], benchmark_dir: Path) -> list[SearchEngine]:
             cache_hydration=True,
             fast_decode=True,
             preload_specs=True,
+            rerank_profile=rerank_profile,
         ),
-        "spectrum_snippet": lambda: SpectrumSnippetSidecarEngine(benchmark_dir),
-        "spectrum_serving": lambda: SpectrumServingPipelineEngine(benchmark_dir),
+        "spectrum_snippet": lambda: SpectrumSnippetSidecarEngine(
+            benchmark_dir,
+            rerank_profile=rerank_profile,
+        ),
+        "spectrum_serving": lambda: SpectrumServingPipelineEngine(
+            benchmark_dir,
+            rerank_profile=rerank_profile,
+        ),
         "spectrum_serving_native": lambda: SpectrumServingPipelineEngine(
             benchmark_dir,
             name="spectrum_serving_pipeline_native",
             native_decode=True,
+            rerank_profile=rerank_profile,
         ),
         "spectrum_serving_ram": lambda: SpectrumServingPipelineEngine(
             benchmark_dir,
             name="spectrum_serving_pipeline_ram",
             preload_specs=True,
+            rerank_profile=rerank_profile,
         ),
         "dense_lsa": lambda: DenseLsaEngine(),
         "faiss": lambda: FaissLsaEngine(),
         "chroma": lambda: ChromaLsaEngine(),
-        "hybrid": lambda: HybridRrfEngine(SpectrumBM25Engine(benchmark_dir), DenseLsaEngine()),
+        "hybrid": lambda: HybridRrfEngine(
+            SpectrumBM25Engine(benchmark_dir, rerank_profile=rerank_profile),
+            DenseLsaEngine(),
+        ),
         "opensearch": lambda: OpenSearchEngine(),
         "zoekt": lambda: ZoektCliEngine(),
         "lucene": lambda: PyseriniLuceneEngine(),
@@ -829,7 +894,11 @@ def run(args: argparse.Namespace) -> dict:
     queries = load_queries(benchmark_dir, Path(args.queries).resolve() if args.queries else None)
     if args.max_queries:
         queries = queries[: args.max_queries]
-    engines = make_engines(args.engine, benchmark_dir)
+    rerank_profile = code_rerank_profile(
+        args.spectrum_rerank,
+        args.spectrum_rerank_candidates,
+    )
+    engines = make_engines(args.engine, benchmark_dir, rerank_profile=rerank_profile)
 
     reports = []
     hydrate_limit = None if args.hydrate_limit < 0 else args.hydrate_limit
@@ -849,6 +918,8 @@ def run(args: argparse.Namespace) -> dict:
             "top_k": args.top_k,
             "hydrate_limit": hydrate_limit if hydrate_limit is not None else args.top_k,
             "engines": args.engine,
+            "spectrum_rerank": args.spectrum_rerank,
+            "spectrum_rerank_candidates": rerank_profile.candidates if rerank_profile else 0,
         },
         "corpus": {
             "docs": len(docs),
@@ -882,6 +953,18 @@ def main() -> int:
         type=int,
         default=-1,
         help="Number of returned docs to hydrate; -1 hydrates top-k, 1 simulates final-result-only hydration, 0 measures search only.",
+    )
+    parser.add_argument(
+        "--spectrum-rerank",
+        choices=["off", "fast", "balanced", "accurate", "quality"],
+        default="accurate",
+        help="Spectrum code rerank profile: off=BM25 only, fast=top-10, balanced=top-25, accurate/quality=top-50.",
+    )
+    parser.add_argument(
+        "--spectrum-rerank-candidates",
+        type=int,
+        default=None,
+        help="Override the Spectrum rerank candidate count; 0 disables reranking.",
     )
     args = parser.parse_args()
     if not args.engine:
