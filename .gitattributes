@@ -1,5 +1,7 @@
 * text=auto
 
+"CLI Tool/bin/*.js" text eol=lf
+
 *.bin binary
 *.pdf binary
 *.pptx binary
