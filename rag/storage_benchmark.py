@@ -373,6 +373,141 @@ class BinarySpectrumBM25:
         ranked = heapq.nlargest(top_k, scores.items(), key=lambda item: item[1])
         return [doc_id for doc_id, score in ranked[:top_k] if score > 0]
 
+    def token_stats(self, query_ids: list[int]) -> list[dict]:
+        stats = []
+        for token_id in dict.fromkeys(query_ids):
+            postings = self.postings.get(token_id, ())
+            df = len(postings)
+            stats.append({
+                "token_id": token_id,
+                "df": df,
+                "df_ratio": self._df_ratio_cache.get(token_id, 0.0),
+                "postings_length": df,
+            })
+        return stats
+
+    def selective_search(
+        self,
+        query_ids: list[int],
+        top_k: int,
+        candidate_limit: int,
+        max_candidate_df_ratio: float = 0.10,
+        rare_df_ratio: float = 0.05,
+        max_precandidates: int = 2000,
+        min_strong_matches: float = 1.0,
+        title_index: dict[int, list[int]] | None = None,
+        title_boost: float = 0.0,
+        strong_token_ids: set[int] | None = None,
+        graded_weighting: bool = True,
+        min_candidate_weight: float = 0.05,
+    ) -> tuple[list[int], dict]:
+        if not query_ids:
+            return [], {
+                "initial_postings_matches": 0,
+                "candidate_pool": 0,
+                "generation_token_ids": [],
+                "dropped_token_ids": [],
+                "token_weights": {},
+                "reranker_in": 0,
+            }
+
+        unique_query_ids = list(dict.fromkeys(query_ids))
+        strong_token_ids = strong_token_ids or set()
+        stats_by_id = {row["token_id"]: row for row in self.token_stats(unique_query_ids)}
+
+        def candidate_weight(token_id: int) -> float:
+            stat = stats_by_id[token_id]
+            df_ratio = stat["df_ratio"]
+            if stat["df"] <= 0:
+                return 0.0
+            idf = self._idf_cache.get(token_id, 0.0)
+            idf_weight = idf / max(math.log(self.N + 1), 1.0)
+            if graded_weighting:
+                if token_id in strong_token_ids:
+                    return max(0.35, idf_weight)
+                return idf_weight
+            if df_ratio <= max_candidate_df_ratio and (
+                token_id in strong_token_ids or df_ratio <= rare_df_ratio
+            ):
+                return 1.0
+            return 0.0
+
+        token_weights = {
+            token_id: candidate_weight(token_id)
+            for token_id in unique_query_ids
+        }
+        generation_token_ids = [
+            token_id for token_id, weight in token_weights.items()
+            if weight >= min_candidate_weight
+        ]
+        generation_token_ids.sort(
+            key=lambda token_id: (
+                -token_weights[token_id],
+                stats_by_id[token_id]["df"],
+                -self._idf_cache.get(token_id, 0.0),
+                token_id,
+            )
+        )
+        dropped_token_ids = [
+            token_id for token_id in unique_query_ids
+            if token_id not in generation_token_ids
+        ]
+
+        candidates: dict[int, float] = {}
+        for token_id in generation_token_ids:
+            weight = token_weights[token_id]
+            for doc_id, _tf in self.postings.get(token_id, ()):
+                candidates[doc_id] = candidates.get(doc_id, 0.0) + weight
+                if len(candidates) >= max_precandidates:
+                    break
+            if len(candidates) >= max_precandidates:
+                break
+
+        candidate_ids = {
+            doc_id for doc_id, matches in candidates.items()
+            if matches >= min_strong_matches
+        }
+        if not candidate_ids:
+            return [], {
+                "initial_postings_matches": 0,
+                "candidate_pool": 0,
+                "generation_token_ids": generation_token_ids,
+                "dropped_token_ids": dropped_token_ids,
+                "token_weights": token_weights,
+                "reranker_in": 0,
+            }
+
+        query_freq = Counter(generation_token_ids)
+        scores: dict[int, float] = {}
+        norms = self._norms
+        k1 = self.k1
+        k1_plus_1 = k1 + 1
+        for token_id, query_count in query_freq.items():
+            idf = self._idf_cache.get(token_id, 0.0)
+            token_weight = token_weights[token_id]
+            for doc_id, tf in self.postings.get(token_id, ()):
+                if doc_id not in candidate_ids:
+                    continue
+                score = idf * (tf * k1_plus_1) / (tf + k1 * norms[doc_id])
+                scores[doc_id] = scores.get(doc_id, 0.0) + score * query_count * token_weight
+
+        if title_boost and title_index:
+            for token_id in generation_token_ids:
+                for doc_id in title_index.get(token_id, ()):
+                    if doc_id in candidate_ids:
+                        scores[doc_id] = scores.get(doc_id, 0.0) + title_boost
+
+        ranked = heapq.nlargest(candidate_limit, scores.items(), key=lambda item: item[1])
+        doc_ids = [doc_id for doc_id, score in ranked[:candidate_limit] if score > 0]
+        return doc_ids, {
+            "initial_postings_matches": len(candidate_ids),
+            "candidate_pool": len(candidate_ids),
+            "generation_token_ids": generation_token_ids,
+            "dropped_token_ids": dropped_token_ids,
+            "token_weights": token_weights,
+            "reranker_in": len(doc_ids),
+        }
+
 
 def write_binary_postings(
     path: Path,

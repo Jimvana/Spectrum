@@ -17,6 +17,7 @@ Or run it without prompts:
 spectrum demo `
   --repo https://github.com/apache/commons-lang `
   --max-files 1000 `
+  --rerank-profile accurate `
   --query "where is string escaping implemented" `
   --clean
 ```
@@ -31,6 +32,10 @@ Generated outputs are written under `demo/runs/` by default, including
 `report.md`, `report.json`, and `demo_report.html`. Cloned repositories are
 written under `demo/workspaces/` by default. Both generated directories are
 ignored by Git.
+
+The search preview supports `--rerank-profile off|fast|balanced|accurate|quality`.
+The default is `accurate`, which uses weighted candidate generation and reranks
+the top 50 candidates.
 
 The benchmark's scored retrieval metrics use generated file/path queries, so
 treat them as a repeatable smoke test. Free-form queries entered during the demo

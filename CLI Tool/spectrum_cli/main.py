@@ -1067,6 +1067,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build")
     demo.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k")
     demo.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")
+    demo.add_argument(
+        "--rerank-profile",
+        choices=["off", "fast", "balanced", "accurate", "quality"],
+        default="accurate",
+        help="Spectrum search preview rerank profile",
+    )
     demo.add_argument("--clean", action="store_true", help="Delete the output directory before running")
     demo.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     demo.set_defaults(func=command_demo)

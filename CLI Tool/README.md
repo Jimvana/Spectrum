@@ -69,12 +69,16 @@ report directory, runs the codebase benchmark, verifies lossless Spectrum
 decoding, and optionally previews free-form searches against the built Spectrum
 store.
 
+The demo search preview accepts `--rerank-profile off|fast|balanced|accurate|quality`.
+`accurate` is the default and reranks the top 50 weighted candidates.
+
 Scriptable demo runs are supported too:
 
 ```powershell
 spectrum demo `
   --repo https://github.com/vladmandic/human `
   --max-files 0 `
+  --rerank-profile accurate `
   --query "face detection pipeline" `
   --query "model loading" `
   --clean

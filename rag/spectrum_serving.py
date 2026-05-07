@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import dictionary as D
 from rag.native_decoder import decode_code_spec_bytes_native_or_fast
 from rag.normalization import retrieval_token_ids
 from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path
@@ -42,6 +43,13 @@ DEFAULT_IDENTIFIER_BOOST = 0.9
 DEFAULT_PATH_BOOST = 1.2
 DEFAULT_STRUCTURE_BOOST = 1.5
 DEFAULT_PROXIMITY_BOOST = 0.6
+DEFAULT_SELECTIVE_CANDIDATES = True
+DEFAULT_CANDIDATE_MAX_DF_RATIO = 0.10
+DEFAULT_CANDIDATE_RARE_DF_RATIO = 0.05
+DEFAULT_MAX_PRECANDIDATES = 2000
+DEFAULT_MIN_STRONG_MATCHES = 0.35
+DEFAULT_MIN_CANDIDATE_WEIGHT = 0.05
+_CODEY_TERM_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9_]+$|[_./\\-]")
 
 
 def _snippet_terms(query: str) -> list[str]:
@@ -84,6 +92,14 @@ def _field_tokens(document: dict, text: str) -> dict[str, set[str]]:
         "identifier": set(identifier_words),
         "structure": set(_split_code_words(structural_text)),
     }
+
+
+def _token_text(token_id: int) -> str:
+    return D.SPEC_ID_TO_TOKEN.get(token_id, f"<{token_id}>")
+
+
+def _is_codey_query_token(token: str) -> bool:
+    return bool(_CODEY_TERM_RE.search(token)) or token.isupper()
 
 
 @dataclass(frozen=True)
@@ -248,6 +264,17 @@ class SpectrumDecodedPayload:
     decode_ms: float
 
 
+@dataclass(frozen=True)
+class CandidatePolicy:
+    enabled: bool = DEFAULT_SELECTIVE_CANDIDATES
+    max_df_ratio: float = DEFAULT_CANDIDATE_MAX_DF_RATIO
+    rare_df_ratio: float = DEFAULT_CANDIDATE_RARE_DF_RATIO
+    max_precandidates: int = DEFAULT_MAX_PRECANDIDATES
+    min_strong_matches: float = DEFAULT_MIN_STRONG_MATCHES
+    graded_weighting: bool = True
+    min_candidate_weight: float = DEFAULT_MIN_CANDIDATE_WEIGHT
+
+
 class SpectrumServingRetriever:
     def __init__(
         self,
@@ -260,6 +287,7 @@ class SpectrumServingRetriever:
         max_df_ratio: float | None = DEFAULT_SERVING_MAX_DF_RATIO,
         title_boost: float = DEFAULT_SERVING_TITLE_BOOST,
         rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
+        candidate_policy: CandidatePolicy | None = CandidatePolicy(),
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ):
         self.spectrum_store_dir = Path(spectrum_store_dir)
@@ -280,6 +308,7 @@ class SpectrumServingRetriever:
         self.snippet_chars = snippet_chars
         self.max_df_ratio = max_df_ratio
         self.title_boost = title_boost
+        self.candidate_policy = candidate_policy
         self.full_decoder = full_decoder
         self.title_index = title_token_index(self.documents) if title_boost else None
         self.reranker = (
@@ -294,6 +323,7 @@ class SpectrumServingRetriever:
             b=b,
         )
         self.decoded_cache: dict[int, str] = {}
+        self.last_search_trace: dict | None = None
 
     @classmethod
     def from_codebase_benchmark(
@@ -307,6 +337,7 @@ class SpectrumServingRetriever:
         max_df_ratio: float | None = DEFAULT_SERVING_MAX_DF_RATIO,
         title_boost: float = DEFAULT_SERVING_TITLE_BOOST,
         rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
+        candidate_policy: CandidatePolicy | None = CandidatePolicy(),
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ) -> "SpectrumServingRetriever":
         benchmark_dir = Path(benchmark_dir)
@@ -325,6 +356,7 @@ class SpectrumServingRetriever:
             max_df_ratio=max_df_ratio,
             title_boost=title_boost,
             rerank_profile=rerank_profile,
+            candidate_policy=candidate_policy,
             full_decoder=full_decoder,
         )
 
@@ -356,19 +388,107 @@ class SpectrumServingRetriever:
             )
         return snippets
 
-    def search(self, query: str, top_k: int = 5) -> list[SpectrumSearchResult]:
+    def query_token_stats(self, query: str) -> list[dict]:
+        policy = self.candidate_policy or CandidatePolicy()
+        rows = []
+        for stat in self.bm25.token_stats(retrieval_token_ids(query)):
+            token_id = int(stat["token_id"])
+            token = _token_text(token_id)
+            df_ratio = float(stat["df_ratio"])
+            if stat["df"] <= 0:
+                token_type = "missing"
+            elif df_ratio <= policy.rare_df_ratio:
+                token_type = "rare"
+            elif df_ratio > policy.max_df_ratio:
+                token_type = "common"
+            elif _is_codey_query_token(token) or (
+                self.title_index is not None and token_id in self.title_index
+            ):
+                token_type = "identifier/path"
+            else:
+                token_type = "text"
+            rows.append({
+                "token_id": token_id,
+                "token": token,
+                "document_frequency": int(stat["df"]),
+                "df_ratio": df_ratio,
+                "postings_length": int(stat["postings_length"]),
+                "token_type": token_type,
+            })
+        return rows
+
+    def _strong_query_token_ids(self, query: str) -> set[int]:
+        strong_ids: set[int] = set()
+        for row in self.query_token_stats(query):
+            if row["token_type"] in {"rare", "identifier/path"}:
+                strong_ids.add(int(row["token_id"]))
+        return strong_ids
+
+    def search_ids_with_trace(
+        self,
+        query: str,
+        top_k: int = 5,
+        include_raw_postings: bool = False,
+    ) -> tuple[list[int], dict]:
         candidate_count = max(top_k, self.reranker.profile.candidates if self.reranker else top_k)
-        doc_ids = self.bm25.search(
-            retrieval_token_ids(query),
-            candidate_count,
-            max_df_ratio=self.max_df_ratio,
-            title_index=self.title_index,
-            title_boost=self.title_boost,
+        query_ids = retrieval_token_ids(query)
+        token_stats = self.query_token_stats(query)
+        raw_postings_matches = (
+            len(self.bm25.candidate_ids(query_ids))
+            if include_raw_postings
+            else None
         )
+        retrieval_started = time.perf_counter()
+        if self.candidate_policy and self.candidate_policy.enabled:
+            doc_ids, trace = self.bm25.selective_search(
+                query_ids,
+                top_k=top_k,
+                candidate_limit=candidate_count,
+                max_candidate_df_ratio=self.candidate_policy.max_df_ratio,
+                rare_df_ratio=self.candidate_policy.rare_df_ratio,
+                max_precandidates=self.candidate_policy.max_precandidates,
+                min_strong_matches=self.candidate_policy.min_strong_matches,
+                title_index=self.title_index,
+                title_boost=self.title_boost,
+                strong_token_ids=self._strong_query_token_ids(query),
+                graded_weighting=self.candidate_policy.graded_weighting,
+                min_candidate_weight=self.candidate_policy.min_candidate_weight,
+            )
+        else:
+            doc_ids = self.bm25.search(
+                query_ids,
+                candidate_count,
+                max_df_ratio=self.max_df_ratio,
+                title_index=self.title_index,
+                title_boost=self.title_boost,
+            )
+            trace = {
+                "candidate_pool": raw_postings_matches,
+                "generation_token_ids": list(dict.fromkeys(query_ids)),
+                "dropped_token_ids": [],
+                "reranker_in": len(doc_ids),
+            }
+        retrieval_ms = (time.perf_counter() - retrieval_started) * 1000
+        rerank_started = time.perf_counter()
         if self.reranker:
             doc_ids = self.reranker.rerank(doc_ids, query, top_k=top_k)
         else:
             doc_ids = doc_ids[:top_k]
+        rerank_ms = (time.perf_counter() - rerank_started) * 1000
+        trace.update({
+            "raw_postings_matches": raw_postings_matches,
+            "initial_postings_matches": trace.get("candidate_pool", raw_postings_matches),
+            "reranker_in": trace.get("reranker_in", 0),
+            "hydrated": 0,
+            "retrieval_ms": retrieval_ms,
+            "rerank_ms": rerank_ms,
+            "token_stats": token_stats,
+        })
+        self.last_search_trace = trace
+        return doc_ids, trace
+
+    def search(self, query: str, top_k: int = 5) -> list[SpectrumSearchResult]:
+        doc_ids, _trace = self.search_ids_with_trace(query, top_k=top_k)
         results = []
         for rank, doc_id in enumerate(doc_ids, start=1):
             doc = self.docs_by_id.get(doc_id)

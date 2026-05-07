@@ -38,6 +38,7 @@ class DemoConfig:
     max_files: int | None
     top_k: int
     postings_format: str
+    rerank_profile: str
     search_queries: list[str]
 
 
@@ -83,9 +84,18 @@ def prompt_yes_no(label: str, default: bool = True) -> bool:
         print("Please enter y or n.")
 
 
+def prompt_choice(label: str, choices: list[str], default: str) -> str:
+    choice_text = "/".join(choices)
+    while True:
+        raw = prompt_text(f"{label} ({choice_text})", default).lower()
+        if raw in choices:
+            return raw
+        print(f"Please enter one of: {', '.join(choices)}.")
+
+
 def collect_interactive_queries() -> list[str]:
     print()
-    print("Step 5 - Enter search queries to try after the benchmark.")
+    print("Step 6 - Enter search queries to try after the benchmark.")
     print("Add one query per line. Press Enter on a blank line when done.")
     queries: list[str] = []
     while True:
@@ -177,6 +187,16 @@ def resolve_config(args: argparse.Namespace, repo_root: Path, interactive: bool)
     if max_files is None and not interactive:
         max_files = 1000
 
+    rerank_profile = args.rerank_profile
+    if interactive:
+        print()
+        print("Step 5 - Choose the search profile for Spectrum result preview.")
+        rerank_profile = prompt_choice(
+            "Rerank profile",
+            ["off", "fast", "balanced", "accurate", "quality"],
+            rerank_profile,
+        )
+
     queries = list(args.query or [])
     if interactive and not queries:
         queries = collect_interactive_queries()
@@ -187,6 +207,7 @@ def resolve_config(args: argparse.Namespace, repo_root: Path, interactive: bool)
         max_files=max_files,
         top_k=args.top_k,
         postings_format=args.postings_format,
+        rerank_profile=rerank_profile,
         search_queries=queries,
     )
 
@@ -221,15 +242,19 @@ def run_search_preview(config: DemoConfig) -> list[dict]:
     if not config.search_queries:
         return []
 
-    from rag.spectrum_serving import SpectrumServingRetriever
+    from rag.spectrum_serving import SpectrumServingRetriever, code_rerank_profile
 
-    retriever = SpectrumServingRetriever.from_codebase_benchmark(config.out_dir)
+    retriever = SpectrumServingRetriever.from_codebase_benchmark(
+        config.out_dir,
+        rerank_profile=code_rerank_profile(config.rerank_profile),
+    )
     rows = []
     md_lines = [
         "# Spectrum Demo Search Preview",
         "",
         f"- Benchmark dir: `{config.out_dir}`",
         f"- Top-k: {config.top_k}",
+        f"- Rerank profile: `{config.rerank_profile}`",
         "",
     ]
     print()
@@ -337,6 +362,7 @@ def write_html_report(config: DemoConfig, report: dict, search_rows: list[dict])
 <main>
   <h1>Spectrum Demo Report</h1>
   <p class="meta">Source: <code>{e(config.source_root)}</code></p>
+  <p class="meta">Search profile: <code>{e(config.rerank_profile)}</code></p>
   <p class="meta">Files: {report['corpus']['files']:,} | Chunks: {report['corpus']['chunks']:,} | Raw bytes: {report['corpus']['raw_bytes']:,}</p>
 
   <h2>Storage</h2>
@@ -377,6 +403,7 @@ def print_summary(config: DemoConfig, report: dict) -> None:
     print("Spectrum demo complete")
     print(f"Source: {config.source_root}")
     print(f"Report: {config.out_dir / 'report.md'}")
+    print(f"Search profile: {config.rerank_profile}")
     print()
     print("Store                         Size        Hit@1   MRR     Recall@{}   Avg ms".format(top_k))
     print(
@@ -416,6 +443,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build.")
     parser.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k.")
     parser.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")
+    parser.add_argument(
+        "--rerank-profile",
+        choices=["off", "fast", "balanced", "accurate", "quality"],
+        default="accurate",
+        help="Spectrum search preview rerank profile.",
+    )
     parser.add_argument("--clean", action="store_true", help="Delete the output directory before running.")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values.")
     return parser
