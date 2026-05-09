@@ -127,7 +127,7 @@ def pack_storage_breakdown(pack_path: Path) -> tuple[int, int]:
         for item in pack.infolist():
             if item.filename == "index.bin":
                 index += item.file_size
-            elif item.filename.startswith("files/"):
+            elif item.filename.startswith("files/") or item.filename.startswith("chunks/"):
                 payload += item.file_size
     return payload, index
 

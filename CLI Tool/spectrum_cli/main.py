@@ -940,7 +940,7 @@ def command_benchmark(args: argparse.Namespace) -> int:
             for item in pack.infolist():
                 if item.filename == PACK_INDEX_NAME:
                     pack_index += item.file_size
-                elif item.filename.startswith("files/"):
+                elif item.filename.startswith("files/") or item.filename.startswith("chunks/"):
                     pack_payload += item.file_size
 
         report = {

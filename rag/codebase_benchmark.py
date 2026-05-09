@@ -15,6 +15,7 @@ import re
 import struct
 import sys
 import time
+import zipfile
 import zlib
 from collections import Counter
 from dataclasses import dataclass
@@ -597,6 +598,45 @@ def build_spectrum_code_store(
     return meta, documents, BinarySpectrumBM25(documents, postings, avg_doc_length, k1=k1, b=b)
 
 
+def write_spectrum_code_pack(
+    store_dir: Path,
+    pack_path: Path,
+    source_root: Path,
+    documents: list[dict],
+) -> dict:
+    if pack_path.exists():
+        pack_path.unlink()
+    manifest = {
+        "format": "spectrum.code.specpack",
+        "version": 1,
+        "source_root": str(source_root),
+        "store_format": "spectrum-code-rag-store-v1",
+        "index_file": "index.bin",
+        "docs_file": "docs.json",
+        "chunks_prefix": "chunks/",
+        "entries": [
+            {
+                "id": int(doc["id"]),
+                "source_path": doc.get("source_path", doc.get("title", "")),
+                "spec": str(doc["path"]).replace("\\", "/"),
+                "orig_length": int(doc.get("orig_length", 0)),
+                "language_id": int(doc.get("language_id", 0)),
+            }
+            for doc in documents
+        ],
+    }
+    pack_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_STORED) as pack:
+        pack.writestr("manifest.json", json.dumps(manifest, indent=2))
+        for rel in ("docs.json", "index.bin", "meta.json"):
+            path = store_dir / rel
+            if path.exists():
+                pack.write(path, rel)
+        for spec_path in sorted((store_dir / "chunks").glob("*.spec")):
+            pack.write(spec_path, rel_path(spec_path, store_dir))
+    return manifest
+
+
 def make_file_queries(chunks: list[CodeChunk], count: int) -> list[dict]:
     by_file: dict[str, list[int]] = {}
     for chunk in chunks:
@@ -704,6 +744,7 @@ def write_report(out_dir: Path, report: dict) -> None:
         f"- Chunks: {report['corpus']['chunks']:,}",
         f"- Raw chunk bytes: {report['corpus']['raw_bytes']:,}",
         f"- Queries: {report['settings']['queries']:,}",
+        f"- Spectrum pack: `{report['stores']['spectrum'].get('pack_path', 'spectrum.specpack')}`",
         "",
         "## Storage",
         "",
@@ -814,6 +855,8 @@ def run(args: argparse.Namespace) -> dict:
         b=args.spectrum_b,
         postings_format=args.postings_format,
     )
+    spectrum_pack_path = out_dir / "spectrum.specpack"
+    write_spectrum_code_pack(spectrum_dir, spectrum_pack_path, source_root, documents)
 
     queries = make_file_queries(chunks, args.queries)
     (out_dir / "queries.json").write_text(json.dumps(queries, indent=2), encoding="utf-8")
@@ -879,8 +922,10 @@ def run(args: argparse.Namespace) -> dict:
                 "components": conventional_components,
             },
             "spectrum": {
-                "bytes": dir_size(spectrum_dir),
-                "ratio_vs_raw": dir_size(spectrum_dir) / raw_bytes if raw_bytes else math.nan,
+                "bytes": spectrum_pack_path.stat().st_size,
+                "ratio_vs_raw": spectrum_pack_path.stat().st_size / raw_bytes if raw_bytes else math.nan,
+                "pack_path": rel_path(spectrum_pack_path, out_dir),
+                "expanded_store_bytes": dir_size(spectrum_dir),
                 "build_seconds": spectrum_meta["build_seconds"],
                 "build_cpu_seconds": spectrum_meta["build_cpu_seconds"],
                 "fidelity_verified": spectrum_meta["fidelity_verified"],

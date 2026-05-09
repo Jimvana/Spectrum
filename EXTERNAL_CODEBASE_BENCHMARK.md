@@ -55,7 +55,8 @@ Run an ECB on https://github.com/owner/repo
    - Each file is encoded into a language-aware `.spec` chunk by default.
    - Use `--chunk-chars 0` for one chunk per file unless testing chunking.
    - The Spectrum store builds `.spec` payloads plus `index.bin` when
-     `--postings-format v2` is used.
+     `--postings-format v2` is used, then packages the canonical Spectrum
+     corpus as `spectrum.specpack`.
    - The conventional store builds raw `chunks.jsonl` plus TF-IDF artifacts.
 
 4. Verify fidelity.
@@ -121,7 +122,7 @@ An ECB win should be framed carefully:
 
 - Storage win: Spectrum total store bytes are smaller than raw+TF-IDF.
 - Payload win: `.spec` payload bytes are smaller than raw JSONL payload bytes.
-- Index win: Spectrum `index.bin + docs.json` is smaller than TF-IDF
+- Index win: Spectrum `spectrum.specpack` index and metadata are smaller than TF-IDF
   matrix plus vocabulary.
 - Retrieval smoke-test win: Spectrum beats raw+TF-IDF on generated file/path
   queries.

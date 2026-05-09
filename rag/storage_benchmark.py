@@ -674,12 +674,22 @@ def load_binary_postings(
     b: float = 0.75,
 ) -> BinarySpectrumBM25:
     raw = path.read_bytes()
+    return load_binary_postings_bytes(raw, documents, source_name=str(path), k1=k1, b=b)
+
+
+def load_binary_postings_bytes(
+    raw: bytes,
+    documents: list[dict],
+    source_name: str = "index.bin",
+    k1: float = 1.5,
+    b: float = 0.75,
+) -> BinarySpectrumBM25:
     magic = raw[:4]
     if magic == BINARY_INDEX_MAGIC:
-        return load_binary_postings_v1(path, documents, raw, k1=k1, b=b)
+        return load_binary_postings_v1(Path(source_name), documents, raw, k1=k1, b=b)
     if magic == BINARY_INDEX_MAGIC_V2:
-        return load_binary_postings_v2(path, documents, raw, k1=k1, b=b)
-    raise ValueError(f"Not a Spectrum binary postings index: {path}")
+        return load_binary_postings_v2(Path(source_name), documents, raw, k1=k1, b=b)
+    raise ValueError(f"Not a Spectrum binary postings index: {source_name}")
 
 
 def preferred_binary_postings_path(store_dir: Path) -> Path:

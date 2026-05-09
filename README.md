@@ -139,7 +139,8 @@ then:
 * verifies byte-for-byte lossless decode fidelity,
 * benchmarks retrieval quality and latency,
 * measures storage footprint,
-* stores the Spectrum retrieval index as `index.bin`,
+* writes the canonical Spectrum corpus as `spectrum.specpack`,
+* stores the Spectrum retrieval index inside the pack as `index.bin`,
 * and writes Markdown, JSON, and HTML reports under:
 
 ```text

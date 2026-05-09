@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -25,7 +26,11 @@ from typing import Callable
 import dictionary as D
 from rag.native_decoder import decode_code_spec_bytes_native_or_fast
 from rag.normalization import retrieval_token_ids
-from rag.storage_benchmark import load_binary_postings, preferred_binary_postings_path
+from rag.storage_benchmark import (
+    load_binary_postings,
+    load_binary_postings_bytes,
+    preferred_binary_postings_path,
+)
 
 _SNIPPET_TERM_RE = re.compile(r"[A-Za-z0-9_]{2,}")
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
@@ -291,19 +296,41 @@ class SpectrumServingRetriever:
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
     ):
         self.spectrum_store_dir = Path(spectrum_store_dir)
-        docs_meta = json.loads((self.spectrum_store_dir / "docs.json").read_text(encoding="utf-8"))
+        self.spectrum_pack_path: Path | None = (
+            self.spectrum_store_dir
+            if self.spectrum_store_dir.is_file() and self.spectrum_store_dir.suffix.lower() == ".specpack"
+            else None
+        )
+        if self.spectrum_pack_path is not None:
+            with zipfile.ZipFile(self.spectrum_pack_path) as pack:
+                docs_meta = json.loads(pack.read("docs.json").decode("utf-8"))
+                index_bytes = pack.read("index.bin")
+        else:
+            docs_meta = json.loads((self.spectrum_store_dir / "docs.json").read_text(encoding="utf-8"))
+            index_bytes = None
         self.documents = docs_meta["documents"]
         self.docs_by_id = {int(doc["id"]): doc for doc in self.documents}
         self.spec_paths = {
             int(doc["id"]): self.spectrum_store_dir / doc["path"]
             for doc in self.documents
         }
+        self.spec_members = {
+            int(doc["id"]): str(doc["path"]).replace("\\", "/")
+            for doc in self.documents
+        }
         self.spec_bytes: dict[int, bytes] = {}
         if preload_specs:
-            self.spec_bytes = {
-                doc_id: path.read_bytes()
-                for doc_id, path in self.spec_paths.items()
-            }
+            if self.spectrum_pack_path is not None:
+                with zipfile.ZipFile(self.spectrum_pack_path) as pack:
+                    self.spec_bytes = {
+                        doc_id: pack.read(member)
+                        for doc_id, member in self.spec_members.items()
+                    }
+            else:
+                self.spec_bytes = {
+                    doc_id: path.read_bytes()
+                    for doc_id, path in self.spec_paths.items()
+                }
         self.snippets_by_id = snippets_by_id
         self.snippet_chars = snippet_chars
         self.max_df_ratio = max_df_ratio
@@ -316,12 +343,21 @@ class SpectrumServingRetriever:
             if rerank_profile and rerank_profile.candidates > 0
             else None
         )
-        self.bm25 = load_binary_postings(
-            preferred_binary_postings_path(self.spectrum_store_dir),
-            self.documents,
-            k1=k1,
-            b=b,
-        )
+        if index_bytes is not None:
+            self.bm25 = load_binary_postings_bytes(
+                index_bytes,
+                self.documents,
+                source_name=f"{self.spectrum_pack_path}#index.bin",
+                k1=k1,
+                b=b,
+            )
+        else:
+            self.bm25 = load_binary_postings(
+                preferred_binary_postings_path(self.spectrum_store_dir),
+                self.documents,
+                k1=k1,
+                b=b,
+            )
         self.decoded_cache: dict[int, str] = {}
         self.last_search_trace: dict | None = None
 
@@ -346,8 +382,11 @@ class SpectrumServingRetriever:
             snippet_chars=snippet_chars,
             sidecar_path=sidecar_path,
         )
+        spectrum_store = benchmark_dir / "spectrum.specpack"
+        if not spectrum_store.exists():
+            spectrum_store = benchmark_dir / "spectrum_spec"
         return cls(
-            benchmark_dir / "spectrum_spec",
+            spectrum_store,
             snippets_by_id=snippets_by_id,
             preload_specs=preload_specs,
             snippet_chars=snippet_chars,
@@ -518,7 +557,11 @@ class SpectrumServingRetriever:
         else:
             data = self.spec_bytes.get(doc_id)
             if data is None:
-                data = self.spec_paths[doc_id].read_bytes()
+                if self.spectrum_pack_path is not None:
+                    with zipfile.ZipFile(self.spectrum_pack_path) as pack:
+                        data = pack.read(self.spec_members[doc_id])
+                else:
+                    data = self.spec_paths[doc_id].read_bytes()
             text = self.full_decoder(data)
             self.decoded_cache[doc_id] = text
         return SpectrumDecodedPayload(
