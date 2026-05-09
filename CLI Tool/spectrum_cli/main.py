@@ -68,6 +68,7 @@ from spec_format.spec_encoder import (
 VERSION = "0.4.1"
 PACK_VERSION = 1
 PACK_INDEX_NAME = "index.bin"
+PACK_COMPRESSION = zipfile.ZIP_STORED
 SUPPORTED_EXTS = {
     ".py",
     ".html",
@@ -209,7 +210,7 @@ def replace_pack_member(pack_path: Path, source: Path, arcname: str) -> None:
     with tempfile.TemporaryDirectory(prefix="spectrum-pack-write-") as tmp_name:
         tmp_zip = Path(tmp_name) / pack_path.name
         with zipfile.ZipFile(pack_path) as src, zipfile.ZipFile(
-            tmp_zip, "w", compression=zipfile.ZIP_DEFLATED
+            tmp_zip, "w", compression=PACK_COMPRESSION
         ) as dst:
             for item in src.infolist():
                 if item.filename == arcname:
@@ -346,7 +347,7 @@ def command_encode(args: argparse.Namespace) -> int:
                 "entries": entries,
             }
             pack_path.parent.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_DEFLATED) as pack:
+            with zipfile.ZipFile(pack_path, "w", compression=PACK_COMPRESSION) as pack:
                 pack.writestr("manifest.json", json.dumps(manifest, indent=2))
                 for entry in entries:
                     pack.write(tmp / entry["spec"], entry["spec"])
@@ -669,7 +670,7 @@ def ensure_benchmark_pack(target: Path, tmp: Path, include_all: bool = False) ->
             "source_root": target.stem,
             "entries": [{"source": target.stem, "spec": f"files/{target.name}", "original_size": 0, "spec_size": target.stat().st_size}],
         }
-        with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_DEFLATED) as pack:
+        with zipfile.ZipFile(pack_path, "w", compression=PACK_COMPRESSION) as pack:
             pack.writestr("manifest.json", json.dumps(manifest, indent=2))
             pack.write(target, f"files/{target.name}")
         build_index_for_target(pack_path)
@@ -699,7 +700,7 @@ def ensure_benchmark_pack(target: Path, tmp: Path, include_all: bool = False) ->
         "source_root": target.name,
         "entries": entries,
     }
-    with zipfile.ZipFile(pack_path, "w", compression=zipfile.ZIP_DEFLATED) as pack:
+    with zipfile.ZipFile(pack_path, "w", compression=PACK_COMPRESSION) as pack:
         pack.writestr("manifest.json", json.dumps(manifest, indent=2))
         for entry in entries:
             pack.write(pack_tmp / entry["spec"], entry["spec"])
@@ -1064,6 +1065,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--workspace-dir", help="Directory for cloned demo repositories")
     demo.add_argument("--out-dir", help="Output directory for demo reports")
     demo.add_argument("--max-files", type=int, help="Maximum source files to scan; 0 means all")
+    demo.add_argument("--max-file-bytes", type=int, default=512_000_000, help="Skip individual source files larger than this")
+    demo.add_argument("--chunk-chars", type=int, default=12_000, help="Characters per benchmark chunk; 0 keeps one chunk per file")
     demo.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build")
     demo.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k")
     demo.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")

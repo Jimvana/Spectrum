@@ -139,6 +139,7 @@ then:
 * verifies byte-for-byte lossless decode fidelity,
 * benchmarks retrieval quality and latency,
 * measures storage footprint,
+* stores the Spectrum retrieval index as `index.bin`,
 * and writes Markdown, JSON, and HTML reports under:
 
 ```text

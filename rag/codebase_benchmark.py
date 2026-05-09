@@ -391,28 +391,66 @@ def encode_code_to_spec_bytes(chunk: CodeChunk) -> tuple[bytes, list[int]]:
     return data, dict_ids
 
 
-def should_skip(path: Path, root: Path, exclude_dirs: set[str], max_file_bytes: int) -> bool:
+def skip_reason(path: Path, root: Path, exclude_dirs: set[str], max_file_bytes: int) -> str | None:
     if path.suffix.lower() not in LANG_BY_EXT:
-        return True
+        return "unsupported_ext"
     if path.stat().st_size > max_file_bytes:
-        return True
+        return "too_large"
     rel_parts = path.relative_to(root).parts
-    return any(
+    if any(
         part in exclude_dirs or part.startswith(DEFAULT_EXCLUDE_PREFIXES)
         for part in rel_parts[:-1]
-    )
+    ):
+        return "excluded_dir"
+    return None
+
+
+def should_skip(path: Path, root: Path, exclude_dirs: set[str], max_file_bytes: int) -> bool:
+    return skip_reason(path, root, exclude_dirs, max_file_bytes) is not None
+
+
+def collect_source_file_diagnostics(
+    root: Path,
+    max_file_bytes: int,
+    exclude_dirs: set[str],
+) -> tuple[list[Path], Counter[str], list[Path]]:
+    files: list[Path] = []
+    skipped: Counter[str] = Counter()
+    oversized_supported: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        reason = skip_reason(path, root, exclude_dirs, max_file_bytes)
+        if reason is None:
+            files.append(path)
+        else:
+            skipped[reason] += 1
+            if reason == "too_large":
+                oversized_supported.append(path)
+    return sorted(files), skipped, sorted(oversized_supported)
 
 
 def collect_source_files(root: Path, max_file_bytes: int, exclude_dirs: set[str]) -> list[Path]:
-    files = []
-    for path in root.rglob("*"):
-        if path.is_file() and not should_skip(path, root, exclude_dirs, max_file_bytes):
-            files.append(path)
-    return sorted(files)
+    files, _skipped, _oversized_supported = collect_source_file_diagnostics(
+        root,
+        max_file_bytes,
+        exclude_dirs,
+    )
+    return files
 
 
 def supported_extensions_text() -> str:
     return ", ".join(sorted(LANG_BY_EXT))
+
+
+def format_bytes(value: int) -> str:
+    units = ("B", "KB", "MB", "GB")
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{value} B"
 
 
 def progress_interval(total: int) -> int:
@@ -524,11 +562,12 @@ def build_spectrum_code_store(
     written_index_formats = []
     if postings_format in {"v1", "both"}:
         print("[codebase-bench] writing SPB1 postings", flush=True)
-        write_binary_postings(out_dir / "postings.bin", documents, postings, avg_doc_length)
+        spb1_path = out_dir / ("postings.bin" if postings_format == "both" else "index.bin")
+        write_binary_postings(spb1_path, documents, postings, avg_doc_length)
         written_index_formats.append("SPB1")
     if postings_format in {"v2", "both"}:
-        print("[codebase-bench] writing SPB2 postings", flush=True)
-        write_binary_postings_v2(out_dir / "postings_v2.bin", documents, postings, avg_doc_length)
+        print("[codebase-bench] writing SPB2 index", flush=True)
+        write_binary_postings_v2(out_dir / "index.bin", documents, postings, avg_doc_length)
         written_index_formats.append("SPB2")
     (out_dir / "docs.json").write_text(
         json.dumps({
@@ -542,6 +581,7 @@ def build_spectrum_code_store(
     )
     meta = {
         "format": "spectrum-code-rag-store-v1",
+        "index_file": "index.bin",
         "index_format": "spectrum-rag-binary-postings-" + postings_format,
         "binary_index_formats": written_index_formats,
         "chunks": len(chunks),
@@ -714,13 +754,35 @@ def run(args: argparse.Namespace) -> dict:
         item.strip() for item in args.exclude_dir if item.strip()
     )
     print(f"[codebase-bench] scanning {source_root}", flush=True)
-    paths = collect_source_files(source_root, args.max_file_bytes, exclude_dirs)
+    paths, skipped, oversized_supported = collect_source_file_diagnostics(
+        source_root,
+        args.max_file_bytes,
+        exclude_dirs,
+    )
     if args.max_files:
         paths = paths[: args.max_files]
     if not paths:
+        details = ""
+        if oversized_supported:
+            examples = ", ".join(
+                f"{rel_path(path, source_root)} ({format_bytes(path.stat().st_size)})"
+                for path in oversized_supported[:5]
+            )
+            details = (
+                f" Found {len(oversized_supported):,} supported file"
+                f"{'s' if len(oversized_supported) != 1 else ''} over the "
+                f"{format_bytes(args.max_file_bytes)} per-file limit: {examples}."
+            )
+        elif skipped:
+            details = (
+                " Skipped files by reason: "
+                + ", ".join(f"{reason}={count:,}" for reason, count in sorted(skipped.items()))
+                + "."
+            )
         raise SystemExit(
             "No supported source files found under "
             f"{source_root}. Supported extensions: {supported_extensions_text()}. "
+            f"{details} "
             "If you entered a Git repo URL, choose a new empty clone path or an existing "
             "checkout of that repository."
         )
@@ -776,7 +838,11 @@ def run(args: argparse.Namespace) -> dict:
         "payload_bytes": dir_size(spectrum_dir / "chunks"),
         "index_bytes": sum(
             path.stat().st_size
-            for path in (spectrum_dir / "postings.bin", spectrum_dir / "postings_v2.bin")
+            for path in (
+                spectrum_dir / "index.bin",
+                spectrum_dir / "postings.bin",
+                spectrum_dir / "postings_v2.bin",
+            )
             if path.exists()
         ) + (spectrum_dir / "docs.json").stat().st_size,
         "metadata_bytes": (spectrum_dir / "meta.json").stat().st_size,

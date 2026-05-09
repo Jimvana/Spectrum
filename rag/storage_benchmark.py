@@ -683,6 +683,9 @@ def load_binary_postings(
 
 
 def preferred_binary_postings_path(store_dir: Path) -> Path:
+    index_path = store_dir / "index.bin"
+    if index_path.exists():
+        return index_path
     v2_path = store_dir / "postings_v2.bin"
     if v2_path.exists():
         return v2_path
@@ -752,10 +755,11 @@ def build_spectrum_store(
     avg_doc_length = total_tokens / len(documents) if documents else 0.0
     written_index_formats = []
     if postings_format in {"v1", "both"}:
-        write_binary_postings(out_dir / "postings.bin", documents, postings, avg_doc_length)
+        spb1_path = out_dir / ("postings.bin" if postings_format == "both" else "index.bin")
+        write_binary_postings(spb1_path, documents, postings, avg_doc_length)
         written_index_formats.append("SPB1")
     if postings_format in {"v2", "both"}:
-        write_binary_postings_v2(out_dir / "postings_v2.bin", documents, postings, avg_doc_length)
+        write_binary_postings_v2(out_dir / "index.bin", documents, postings, avg_doc_length)
         written_index_formats.append("SPB2")
     docs_meta = {
         "format": "spectrum-rag-binary-postings-docs-v1",
@@ -770,6 +774,7 @@ def build_spectrum_store(
     )
     meta = {
         "format": "spectrum-rag-store-v1",
+        "index_file": "index.bin",
         "index_format": "spectrum-rag-binary-postings-" + postings_format,
         "binary_index_formats": written_index_formats,
         "chunks": len(chunks),
@@ -1019,7 +1024,7 @@ def write_report(out_dir: Path, report: dict) -> None:
         f"- Spectrum lossless round-trip: `{s['lossless_ok']}`",
         f"- Fidelity failures: {fidelity_failures_text}",
         "",
-        "The conventional baseline is a portable local RAG proxy: raw text chunk store plus persisted TF-IDF vectors. The Spectrum store keeps chunk text only as `.spec` payloads and stores token postings/frequencies in `postings.bin`. Chroma/FAISS/neural embeddings can be added as an additional baseline later.",
+        "The conventional baseline is a portable local RAG proxy: raw text chunk store plus persisted TF-IDF vectors. The Spectrum store keeps chunk text only as `.spec` payloads and stores token postings/frequencies in `index.bin`. Chroma/FAISS/neural embeddings can be added as an additional baseline later.",
     ])
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1141,7 +1146,11 @@ def run(args: argparse.Namespace) -> dict:
         "payload_bytes": dir_size(spectrum_dir / "chunks"),
         "index_bytes": sum(
             path.stat().st_size
-            for path in (spectrum_dir / "postings.bin", spectrum_dir / "postings_v2.bin")
+            for path in (
+                spectrum_dir / "index.bin",
+                spectrum_dir / "postings.bin",
+                spectrum_dir / "postings_v2.bin",
+            )
             if path.exists()
         ) + (spectrum_dir / "docs.json").stat().st_size,
         "metadata_bytes": (spectrum_dir / "meta.json").stat().st_size,

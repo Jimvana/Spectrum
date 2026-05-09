@@ -36,6 +36,8 @@ class DemoConfig:
     source_root: Path
     out_dir: Path
     max_files: int | None
+    max_file_bytes: int
+    chunk_chars: int
     top_k: int
     postings_format: str
     rerank_profile: str
@@ -205,6 +207,8 @@ def resolve_config(args: argparse.Namespace, repo_root: Path, interactive: bool)
         source_root=source_root,
         out_dir=out_dir.expanduser().resolve(),
         max_files=max_files,
+        max_file_bytes=args.max_file_bytes,
+        chunk_chars=args.chunk_chars,
         top_k=args.top_k,
         postings_format=args.postings_format,
         rerank_profile=rerank_profile,
@@ -222,8 +226,8 @@ def run_codebase_benchmark(config: DemoConfig, clean: bool) -> dict:
         source_root=str(config.source_root),
         out_dir=str(config.out_dir),
         max_files=config.max_files,
-        max_file_bytes=1_000_000,
-        chunk_chars=0,
+        max_file_bytes=config.max_file_bytes,
+        chunk_chars=config.chunk_chars,
         overlap_chars=600,
         queries=80,
         top_k=config.top_k,
@@ -440,6 +444,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-dir", help="Directory for cloned demo repositories.")
     parser.add_argument("--out-dir", help="Output directory for benchmark reports.")
     parser.add_argument("--max-files", type=int, help="Maximum source files to scan; 0 means all.")
+    parser.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=512_000_000,
+        help="Skip individual source files larger than this.",
+    )
+    parser.add_argument(
+        "--chunk-chars",
+        type=int,
+        default=12_000,
+        help="Characters per benchmark chunk; 0 keeps one chunk per file.",
+    )
     parser.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build.")
     parser.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k.")
     parser.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")

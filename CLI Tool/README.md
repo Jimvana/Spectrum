@@ -89,8 +89,9 @@ running side-by-side Spectrum vs raw BM25 vs embedding/vector searches, and
 launching the same generated-query benchmark from a page instead of the
 terminal.
 
-For benchmark folders that contain `spectrum_spec/postings_v2.bin`, the GUI
-uses SPB2 automatically and falls back to `postings.bin` for older stores. The
+For benchmark folders that contain `spectrum_spec/index.bin`, the GUI
+uses that Spectrum binary index automatically and falls back to older
+`postings_v2.bin` / `postings.bin` stores. The
 Spectrum Pack size card reports the effective loaded store size: `.spec`
 payloads plus docs/metadata plus the selected postings file.
 
