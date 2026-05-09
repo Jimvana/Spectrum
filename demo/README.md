@@ -2,8 +2,8 @@
 
 The demo is a guided code-search challenge for trying Spectrum on a real
 repository. It builds a conventional raw-code retrieval store and a Spectrum
-`.spec` + SPB2 store from the same files, verifies lossless decode fidelity,
-then prints and writes a benchmark report.
+`.specpack` store from the same files, verifies lossless decode fidelity, then
+prints and writes a benchmark report.
 
 Run the guided flow:
 

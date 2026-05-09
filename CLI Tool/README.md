@@ -90,11 +90,9 @@ launching the same generated-query benchmark from a page instead of the
 terminal.
 
 For benchmark folders that contain `spectrum.specpack`, the demo and serving
-path use that pack as the canonical Spectrum corpus. Expanded benchmark folders
-with `spectrum_spec/index.bin` remain supported, with fallback to older
-`postings_v2.bin` / `postings.bin` stores. The
-Spectrum Pack size card reports the effective loaded store size: `.spec`
-payloads plus docs/metadata plus the selected postings file.
+path use that pack as the canonical Spectrum corpus. The Spectrum Pack size
+card reports the effective loaded corpus size: `.spec` payloads plus docs,
+metadata, and `index.bin`.
 
 Convenience scripts are available for the local GUI server:
 

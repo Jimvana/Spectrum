@@ -132,7 +132,7 @@ spectrum demo `
 The demo clones or scans a repository, builds:
 
 * a conventional raw-code TF-IDF retrieval store,
-* and a Spectrum `.spec` + SPB2 BM25 retrieval store,
+* and a Spectrum `.specpack` BM25 retrieval store,
 
 then:
 

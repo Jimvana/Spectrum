@@ -39,7 +39,6 @@ class DemoConfig:
     max_file_bytes: int
     chunk_chars: int
     top_k: int
-    postings_format: str
     rerank_profile: str
     search_queries: list[str]
 
@@ -210,7 +209,6 @@ def resolve_config(args: argparse.Namespace, repo_root: Path, interactive: bool)
         max_file_bytes=args.max_file_bytes,
         chunk_chars=args.chunk_chars,
         top_k=args.top_k,
-        postings_format=args.postings_format,
         rerank_profile=rerank_profile,
         search_queries=queries,
     )
@@ -236,7 +234,7 @@ def run_codebase_benchmark(config: DemoConfig, clean: bool) -> dict:
         spectrum_b=0.75,
         spectrum_max_df_ratio=0.9,
         spectrum_title_boost=0.5,
-        postings_format=config.postings_format,
+        postings_format="v2",
         exclude_dir=DEFAULT_EXCLUDES,
     )
     return codebase_benchmark.run(bench_args)
@@ -374,7 +372,7 @@ def write_html_report(config: DemoConfig, report: dict, search_rows: list[dict])
     <thead><tr><th>Store</th><th>Bytes</th><th>Ratio vs raw</th><th>Payload bytes</th><th>Index bytes</th><th>Build sec</th></tr></thead>
     <tbody>
       <tr><td>Conventional raw+TF-IDF</td><td>{raw['bytes']:,}</td><td>{raw['ratio_vs_raw']:.3f}x</td><td>{raw['components']['payload_bytes']:,}</td><td>{raw['components']['index_bytes']:,}</td><td>{raw['build_seconds']:.3f}</td></tr>
-      <tr><td>Spectrum .spec+SPB2 BM25</td><td>{spectrum['bytes']:,}</td><td>{spectrum['ratio_vs_raw']:.3f}x</td><td>{spectrum['components']['payload_bytes']:,}</td><td>{spectrum['components']['index_bytes']:,}</td><td>{spectrum['build_seconds']:.3f}</td></tr>
+      <tr><td>Spectrum .specpack + BM25</td><td>{spectrum['bytes']:,}</td><td>{spectrum['ratio_vs_raw']:.3f}x</td><td>{spectrum['components']['payload_bytes']:,}</td><td>{spectrum['components']['index_bytes']:,}</td><td>{spectrum['build_seconds']:.3f}</td></tr>
     </tbody>
   </table>
 
@@ -383,7 +381,7 @@ def write_html_report(config: DemoConfig, report: dict, search_rows: list[dict])
     <thead><tr><th>Store</th><th>Hit@1</th><th>MRR</th><th>Recall@{top_k}</th><th>Avg ms</th><th>P95 ms</th></tr></thead>
     <tbody>
       <tr><td>Conventional raw+TF-IDF</td><td>{raw_ret['hit_at_1']:.3f}</td><td>{raw_ret['mrr']:.3f}</td><td>{raw_ret[f'recall_at_{top_k}']:.3f}</td><td>{raw_ret['avg_query_ms']:.3f}</td><td>{raw_ret['p95_query_ms']:.3f}</td></tr>
-      <tr><td>Spectrum .spec+SPB2 BM25</td><td>{spectrum_ret['hit_at_1']:.3f}</td><td>{spectrum_ret['mrr']:.3f}</td><td>{spectrum_ret[f'recall_at_{top_k}']:.3f}</td><td>{spectrum_ret['avg_query_ms']:.3f}</td><td>{spectrum_ret['p95_query_ms']:.3f}</td></tr>
+      <tr><td>Spectrum .specpack + BM25</td><td>{spectrum_ret['hit_at_1']:.3f}</td><td>{spectrum_ret['mrr']:.3f}</td><td>{spectrum_ret[f'recall_at_{top_k}']:.3f}</td><td>{spectrum_ret['avg_query_ms']:.3f}</td><td>{spectrum_ret['p95_query_ms']:.3f}</td></tr>
     </tbody>
   </table>
 
@@ -416,7 +414,7 @@ def print_summary(config: DemoConfig, report: dict) -> None:
         f"{raw_ret[f'recall_at_{top_k}']:.3f}      {raw_ret['avg_query_ms']:.3f}"
     )
     print(
-        "Spectrum .spec+SPB2 BM25     "
+        "Spectrum .specpack + BM25    "
         f"{spectrum['bytes']:>10,}  {spectrum_ret['hit_at_1']:.3f}   {spectrum_ret['mrr']:.3f}   "
         f"{spectrum_ret[f'recall_at_{top_k}']:.3f}      {spectrum_ret['avg_query_ms']:.3f}"
     )
@@ -458,7 +456,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build.")
     parser.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k.")
-    parser.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")
     parser.add_argument(
         "--rerank-profile",
         choices=["off", "fast", "balanced", "accurate", "quality"],

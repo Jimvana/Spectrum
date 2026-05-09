@@ -14,7 +14,7 @@ The goal is to compare:
 
 2. A Spectrum codebase RAG store:
    - cloned source files encoded into lossless `.spec` chunks
-   - compact binary Spectrum BM25 postings index
+   - compact Spectrum BM25 `index.bin`
    - retrieval-only aliases from paths, filenames, language names, and
      identifiers
    - no raw source text stored in the Spectrum store
@@ -54,9 +54,8 @@ Run an ECB on https://github.com/owner/repo
    - The harness scans supported source files.
    - Each file is encoded into a language-aware `.spec` chunk by default.
    - Use `--chunk-chars 0` for one chunk per file unless testing chunking.
-   - The Spectrum store builds `.spec` payloads plus `index.bin` when
-     `--postings-format v2` is used, then packages the canonical Spectrum
-     corpus as `spectrum.specpack`.
+   - The Spectrum store builds `.spec` payloads plus `index.bin`, then packages
+     the canonical Spectrum corpus as `spectrum.specpack`.
    - The conventional store builds raw `chunks.jsonl` plus TF-IDF artifacts.
 
 4. Verify fidelity.
@@ -93,7 +92,6 @@ python rag\codebase_benchmark.py `
   --source-root external_repos\repo `
   --out-dir benchmarks\generated\codebase_benchmark_repo `
   --max-files 0 `
-  --postings-format v2 `
   --queries 120 `
   --exclude-dir dist `
   --exclude-dir build `
@@ -146,8 +144,7 @@ python rag\codebase_benchmark.py `
   --source-root /Users/video/jdk `
   --out-dir benchmarks\generated\codebase_benchmark_openjdk_jdk_java_spb2 `
   --max-files 0 `
-  --queries 80 `
-  --postings-format v2
+  --queries 80
 ```
 
 Result:
@@ -155,7 +152,7 @@ Result:
 | Store | Bytes | Ratio vs raw chunks | Payload bytes | Index/vector bytes | Hit@1 | MRR | Recall@5 | Avg query ms | P95 query ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Conventional raw+TF-IDF | 507,690,480 | 1.242x | 435,772,020 | 71,918,310 | 0.200 | 0.258 | 0.362 | 18.856 | 22.474 |
-| Spectrum `.spec`+SPB2 BM25 | 185,950,831 | 0.455x | 144,726,790 | 41,223,626 | 0.325 | 0.439 | 0.637 | 15.347 | 28.328 |
+| Spectrum `.specpack` BM25 | 185,950,831 | 0.455x | 144,726,790 | 41,223,626 | 0.325 | 0.439 | 0.637 | 15.347 | 28.328 |
 
 Fidelity:
 

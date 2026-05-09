@@ -1069,7 +1069,6 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--chunk-chars", type=int, default=12_000, help="Characters per benchmark chunk; 0 keeps one chunk per file")
     demo.add_argument("--query", action="append", help="Free-form Spectrum search query to preview after the build")
     demo.add_argument("--top-k", type=int, default=5, help="Number of search results and Recall@k")
-    demo.add_argument("--postings-format", choices=["v1", "v2", "both"], default="v2")
     demo.add_argument(
         "--rerank-profile",
         choices=["off", "fast", "balanced", "accurate", "quality"],
