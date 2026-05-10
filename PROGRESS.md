@@ -26,6 +26,15 @@ backwards compatibility and dictionary coverage.
 
 ## Current Focus
 
+- Expand the active dictionary before the public core format is treated as
+  stable. Keep existing dictionary versions frozen for decode compatibility,
+  avoid reordering shipped token IDs, and only lock the next dictionary once the
+  broader token coverage has been tested.
+- Prepare an npm-distributed bundled CLI package when the core CLI is ready.
+  Target package name: `spectrumstore`, exposing `spectrum` and `spectrumstore`
+  commands. Publish only after pack/decode-or-unpack/verify/inspect work from a
+  bundled implementation, Python-missing errors are clear, and `npm pack` plus
+  global tarball install have been tested locally.
 - Mixed code/document retrieval quality.
 - Human-labelled query sets.
 - Stronger baseline comparisons.

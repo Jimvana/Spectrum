@@ -1,0 +1,2 @@
+"""Spectrum ecosystem CLI package."""
+

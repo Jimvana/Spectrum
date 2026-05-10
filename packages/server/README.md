@@ -2,7 +2,25 @@
 
 Server owns the local-first HTTP API for pack management, ingestion, search, decode, verification, benchmarking, and memory endpoints.
 
-Planned layout:
+The first server package is dependency-light and uses Python's standard library
+HTTP server over `spectrum_core`.
 
-- `src/` - API implementation.
-- `tests/` - endpoint and service tests.
+Run locally:
+
+```powershell
+$env:PYTHONPATH="packages/core/src;packages/server/src"
+python -m spectrum_server.main --pack docs=./docs.specpack --port 7777
+```
+
+Endpoints:
+
+- `GET /health`
+- `GET /packs`
+- `POST /packs` with `{"id": "docs", "path": "./docs.specpack"}`
+- `GET /packs/{pack_id}`
+- `DELETE /packs/{pack_id}`
+- `POST /packs/{pack_id}/verify`
+- `POST /packs/{pack_id}/unpack` with `{"output_dir": "./decoded"}`
+
+Search, document ingestion, and memory endpoints will be added after the index
+and memory packages are split out.

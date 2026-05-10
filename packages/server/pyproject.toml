@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectrum-server"
+version = "0.1.0"
+description = "Local-first HTTP API for Spectrum packs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "spectrum-core==0.1.0",
+]
+
+[project.scripts]
+spectrum-server = "spectrum_server.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

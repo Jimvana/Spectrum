@@ -1,0 +1,19 @@
+{
+  "name": "@spectrumstore/sdk",
+  "version": "0.1.0",
+  "description": "JavaScript SDK for Spectrum packs.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
