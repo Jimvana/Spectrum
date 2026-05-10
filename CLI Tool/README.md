@@ -3,7 +3,7 @@
 Experimental command line wrapper for Spectrum `.spec` files.
 
 The current CLI runtime uses dictionary v12, covering Python, HTML,
-JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML/Wiki, Java, C, C++, Go, C#,
+JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML-compatible payloads, Java, C, C++, Go, C#,
 shell, JSON, YAML, TOML, and English text.
 
 ## Install Or Update

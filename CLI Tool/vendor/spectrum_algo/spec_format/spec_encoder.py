@@ -12,7 +12,7 @@ Header (16 bytes, uncompressed):
   [8:12]  Original length: uint32 BE  (bytes in original UTF-8 source)
   [12:14] Language ID:     uint16 BE  (0=Python, 1=HTML, 2=JS, 3=CSS,
                                        4=Text, 5=TS, 6=SQL, 7=Rust, 8=PHP,
-                                       9=XML/Wiki, 10=Java, 11=C, 12=C++,
+                                       9=XML-compatible, 10=Java, 11=C, 12=C++,
                                        13=Go, 14=C#, 15=Shell, 16=JSON,
                                        17=YAML, 18=TOML)
   [14:16] Checksum:        uint16 BE  (sum of all original bytes mod 65536)
@@ -55,7 +55,7 @@ from tokenizers.html_tokenizer import tokenise_html
 from tokenizers.js_tokenizer import tokenise_js
 from tokenizers.css_tokenizer import tokenise_css
 from tokenizers.text_tokenizer import tokenize_text
-from tokenizers.wiki_tokenizer import tokenize_wiki_source
+from tokenizers.xml_tokenizer import tokenize_xml_compatible_source
 from tokenizers.ts_tokenizer import tokenise_ts
 from tokenizers.sql_tokenizer import tokenise_sql
 from tokenizers.rust_tokenizer import tokenise_rust
@@ -93,6 +93,12 @@ LANGUAGE_YAML   = 17
 LANGUAGE_TOML   = 18
 
 FLAG_RLE = 0b0000_0001
+RLE_MODE_OFF = "off"
+RLE_MODE_AUTO = "auto"
+RLE_MODE_FORCE = "force"
+RLE_MODES = (RLE_MODE_OFF, RLE_MODE_AUTO, RLE_MODE_FORCE)
+DEFAULT_RLE_MIN_SAVINGS = 0.02
+DEFAULT_RLE_BLOCK_SIZE = 65_536
 
 # Extension → language ID
 _EXT_TO_LANG = {
@@ -142,7 +148,7 @@ _LANG_NAMES = {
     LANGUAGE_SQL:    "SQL",
     LANGUAGE_RUST:   "Rust",
     LANGUAGE_PHP:    "PHP",
-    LANGUAGE_XML:    "XML/Wiki",
+    LANGUAGE_XML:    "XML-compatible",
     LANGUAGE_JAVA:   "Java",
     LANGUAGE_C:      "C",
     LANGUAGE_CPP:    "C++",
@@ -267,6 +273,57 @@ def apply_rle_ids(ids: list[int]) -> list[int]:
     return result
 
 
+def normalize_rle_mode(use_rle: bool | str) -> str:
+    """Accept the old bool API and the newer explicit mode strings."""
+    if isinstance(use_rle, bool):
+        return RLE_MODE_FORCE if use_rle else RLE_MODE_OFF
+    mode = use_rle.lower()
+    if mode not in RLE_MODES:
+        raise ValueError(f"unknown RLE mode {use_rle!r}; expected one of {', '.join(RLE_MODES)}")
+    return mode
+
+
+def apply_rle_ids_auto(
+    ids: list[int],
+    min_savings: float = DEFAULT_RLE_MIN_SAVINGS,
+    block_size: int = DEFAULT_RLE_BLOCK_SIZE,
+    zlib_level: int = 9,
+) -> tuple[list[int], int, int]:
+    """
+    Sample RLE after packing and zlib first. If the sample wins, apply RLE
+    independently per block and keep blocks with enough raw ID savings.
+    """
+    if block_size <= 0:
+        raise ValueError("rle_block_size must be greater than zero")
+    if not ids:
+        return ids, 0, 0
+
+    sample = ids[:block_size]
+    encoded_sample = apply_rle_ids(sample)
+    raw_sample = struct.pack(f"<{len(sample)}I", *sample)
+    rle_sample = struct.pack(f"<{len(encoded_sample)}I", *encoded_sample)
+    raw_sample_size = len(zlib.compress(raw_sample, level=zlib_level))
+    rle_sample_size = len(zlib.compress(rle_sample, level=zlib_level))
+    sampled_savings = (raw_sample_size - rle_sample_size) / max(raw_sample_size, 1)
+    if sampled_savings < min_savings:
+        return ids, 0, 0
+
+    result: list[int] = []
+    encoded_blocks = 0
+    total_blocks = 0
+    for start in range(0, len(ids), block_size):
+        block = ids[start:start + block_size]
+        encoded = apply_rle_ids(block)
+        total_blocks += 1
+        saved = len(block) - len(encoded)
+        if saved > 0 and saved / max(len(block), 1) >= min_savings:
+            result.extend(encoded)
+            encoded_blocks += 1
+        else:
+            result.extend(block)
+    return result, encoded_blocks, total_blocks
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Header
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,9 +345,11 @@ def build_header(dict_version: int, original_length: int, checksum: int,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def encode_file(source_path: str, output_path: str,
-                use_rle: bool = True,
+                use_rle: bool | str = RLE_MODE_OFF,
                 language_id: int = LANGUAGE_PYTHON,
-                zlib_level: int = 9) -> dict:
+                zlib_level: int = 9,
+                rle_min_savings: float = DEFAULT_RLE_MIN_SAVINGS,
+                rle_block_size: int = DEFAULT_RLE_BLOCK_SIZE) -> dict:
     """
     Encode a source file to a .spec binary.
 
@@ -329,7 +388,7 @@ def encode_file(source_path: str, output_path: str,
     elif language_id == LANGUAGE_PHP:
         tokens = tokenise_php(source)
     elif language_id == LANGUAGE_XML:
-        tokens = tokenize_wiki_source(source)
+        tokens = tokenize_xml_compatible_source(source)
     elif language_id == LANGUAGE_JAVA:
         tokens = tokenise_java(source)
     elif language_id == LANGUAGE_C:
@@ -355,12 +414,30 @@ def encode_file(source_path: str, output_path: str,
 
     # RLE on ID stream
     flags = 0
-    if use_rle:
+    rle_mode = normalize_rle_mode(use_rle)
+    rle_blocks_encoded = 0
+    rle_blocks_total = 0
+    if rle_mode == RLE_MODE_FORCE:
         ids = apply_rle_ids(ids)
         flags |= FLAG_RLE
         rle_saved = raw_id_count - len(ids)
         print(f"[spec_enc] RLE: {raw_id_count:,} → {len(ids):,} IDs "
               f"(saved {rle_saved:,}, {100*rle_saved/max(raw_id_count,1):.1f}%)")
+    elif rle_mode == RLE_MODE_AUTO:
+        ids, rle_blocks_encoded, rle_blocks_total = apply_rle_ids_auto(
+            ids,
+            min_savings=rle_min_savings,
+            block_size=rle_block_size,
+            zlib_level=zlib_level,
+        )
+        if rle_blocks_encoded:
+            flags |= FLAG_RLE
+        rle_saved = raw_id_count - len(ids)
+        print(
+            f"[spec_enc] RLE auto: {raw_id_count:,} -> {len(ids):,} IDs "
+            f"(saved {rle_saved:,}, {100*rle_saved/max(raw_id_count,1):.1f}%; "
+            f"{rle_blocks_encoded}/{rle_blocks_total} blocks kept)"
+        )
 
     # Pack as uint32 LE (upgraded from uint16 in v7)
     raw_stream = struct.pack(f"<{len(ids)}I", *ids)
@@ -386,7 +463,11 @@ def encode_file(source_path: str, output_path: str,
         "raw_stream_bytes": len(raw_stream),
         "compressed_bytes": len(compressed),
         "ratio":         round(spec_size / original_size, 4) if original_size else 0.0,
-        "use_rle":       use_rle,
+        "use_rle":       rle_mode != RLE_MODE_OFF,
+        "rle_mode":      rle_mode,
+        "rle_min_savings": rle_min_savings,
+        "rle_blocks_encoded": rle_blocks_encoded,
+        "rle_blocks_total": rle_blocks_total,
     }
 
     print(f"[spec_enc] Saved {output_path.name}  "
@@ -408,7 +489,15 @@ def main():
     parser.add_argument("--out", default=None,
                         help="Output .spec path (default: spec_format/output/<stem>.spec)")
     parser.add_argument("--no-rle", action="store_true",
-                        help="Disable RLE compression")
+                        help="Deprecated alias for --rle=off")
+    parser.add_argument("--rle", choices=RLE_MODES, default=RLE_MODE_OFF,
+                        help="RLE mode: off (default), auto, or force")
+    parser.add_argument("--rle-min-savings", type=float,
+                        default=DEFAULT_RLE_MIN_SAVINGS,
+                        help="Minimum per-block ID savings ratio for --rle=auto (default: 0.02)")
+    parser.add_argument("--rle-block-size", type=int,
+                        default=DEFAULT_RLE_BLOCK_SIZE,
+                        help="ID block size for --rle=auto (default: 65536)")
     parser.add_argument("--zlib-level", type=int, default=9,
                         help="zlib compression level 1–9 (default: 9)")
     parser.add_argument("--lang",
@@ -455,8 +544,16 @@ def main():
     }
     lang_id  = lang_map[args.lang] if args.lang else LANGUAGE_PYTHON
 
-    encode_file(str(src), str(out), use_rle=not args.no_rle,
-                language_id=lang_id, zlib_level=args.zlib_level)
+    rle_mode = RLE_MODE_OFF if args.no_rle else args.rle
+    encode_file(
+        str(src),
+        str(out),
+        use_rle=rle_mode,
+        language_id=lang_id,
+        zlib_level=args.zlib_level,
+        rle_min_savings=args.rle_min_savings,
+        rle_block_size=args.rle_block_size,
+    )
 
 
 if __name__ == "__main__":

@@ -93,7 +93,7 @@ def slide_1():
     draw.polygon([(1120, 0), (1920, 0), (1920, 1080), (1460, 1080)], fill="#2F2A1F")
     text(draw, (104, 100), "SPECTRUM", 48, fill=GOLD, bold=True)
     text(draw, (104, 210), ".spec beats\nraw RAG storage", 104, fill=CREAM, bold=True, spacing=10)
-    text(draw, (108, 485), "Lossless compressed chunks + compact token BM25\nagainst raw text + TF-IDF on Wiki and code.", 36, fill="#D8E7DF")
+    text(draw, (108, 485), "Lossless compressed chunks + compact token BM25\nagainst raw text + TF-IDF on code and text corpora.", 36, fill="#D8E7DF")
     metric(draw, 108, 705, "58%", "smaller total store on external codebase", color="#5EF0C5", large=88)
     metric(draw, 720, 705, "5.6x", "faster avg query on that smoke test", color="#F2C15B", large=88)
     text(draw, (108, 984), "Evidence deck | built from local benchmark outputs", 24, fill="#BFB7A8")
@@ -162,13 +162,13 @@ def slide_5():
 
 
 def slide_6():
-    img, draw = slide_base("Wiki proves the storage idea on prose", "context")
-    text(draw, (96, 205), "The 120-page Wiki sample is the harder prose case. Spectrum still stores less overall while staying lossless.", 31, fill=MUTED)
+    img, draw = slide_base("Text corpora test the storage idea", "context")
+    text(draw, (96, 205), "Plain-text and mixed-document corpora test whether Spectrum stores less overall while staying lossless.", 31, fill=MUTED)
     bar_pair(draw, 140, 345, 1040, 54, 6.430, 4.173, "RAW + TF-IDF total store", "SPECTRUM .spec + BM25 total store", 6.6, suffix="MB")
     metric(draw, 1300, 350, "35%", "smaller total store", color=SPEC_DARK, large=82)
     metric(draw, 1300, 555, "0.923", "Spectrum Hit@1 vs 1.000 raw", color=GOLD, large=72)
-    text(draw, (140, 770), "Takeaway: code is where Spectrum is currently most visually compelling.\nWiki remains useful as a prose stress test.", 35, fill=INK, spacing=12)
-    footer(draw, "Source: 120-page Wikipedia sample, 6k-character chunks")
+    text(draw, (140, 770), "Takeaway: code is where Spectrum is currently most visually compelling.\nText corpora remain useful as prose stress tests.", 35, fill=INK, spacing=12)
+    footer(draw, "Source: text-corpus storage benchmark, 6k-character chunks")
     return img
 
 

@@ -19,7 +19,7 @@ Version history:
   v7  — Python, HTML, JS, CSS, English text           (234,702 tokens)
   v8  — adds TypeScript, SQL, Rust                    (234,830 tokens)
   v9  — adds PHP                                      (234,893 tokens)
-  v10 — adds XML/Wiki source tokens                   (234,957 tokens)
+  v10 - adds XML-compatible source tokens             (234,957 tokens)
   v11 — Java tokenizer wiring, no dictionary growth   (234,957 tokens)
 
 Adding a new version snapshot:

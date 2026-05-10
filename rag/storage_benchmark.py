@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import heapq
-import html
 import json
 import math
 import re
@@ -63,9 +62,6 @@ except Exception as exc:  # pragma: no cover - runtime dependency check
     )
 
 
-PAGE_RE = re.compile(r"<page>\s*(.*?)\s*</page>", re.DOTALL)
-TITLE_RE = re.compile(r"<title>(.*?)</title>", re.DOTALL)
-TEXT_RE = re.compile(r"<text\b[^>]*>(.*?)</text>", re.DOTALL)
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9']+")
 BINARY_INDEX_MAGIC = b"SPB1"
 BINARY_INDEX_VERSION = 1
@@ -78,7 +74,7 @@ class Chunk:
     id: int
     title: str
     text: str
-    page_index: int
+    source_index: int
     chunk_index: int
 
 
@@ -121,44 +117,52 @@ def decode_spec_to_text(spec_path: Path) -> str:
     return text
 
 
-def extract_wiki_pages(page_index_path: Path, max_pages: int) -> list[tuple[str, str]]:
-    page_index = read_json(page_index_path)
-    manifest_path = Path(page_index["source_manifest"])
-    if not manifest_path.is_absolute():
-        manifest_path = (_ROOT / manifest_path).resolve()
-    manifest = read_json(manifest_path)
-    manifest_dir = manifest_path.parent
+def load_corpus_records(
+    corpus_jsonl: Path | None,
+    text_dir: Path | None,
+    max_records: int,
+) -> list[tuple[str, str]]:
+    records: list[tuple[str, str]] = []
+    if corpus_jsonl is not None:
+        with corpus_jsonl.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if max_records and len(records) >= max_records:
+                    break
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                title = str(row.get("title") or row.get("path") or f"record-{line_number}")
+                text = str(row.get("text") or row.get("content") or "")
+                if text.strip():
+                    records.append((title, text))
+        return records
 
-    pages: list[tuple[str, str]] = []
-    for chunk in manifest["chunks"]:
-        if len(pages) >= max_pages:
-            break
-        xml = decode_spec_to_text(manifest_dir / chunk["path"])
-        for match in PAGE_RE.finditer(xml):
-            title_match = TITLE_RE.search(match.group(1))
-            text_match = TEXT_RE.search(match.group(1))
-            if not title_match or not text_match:
-                continue
-            title = html.unescape(title_match.group(1)).strip()
-            text = html.unescape(text_match.group(1)).strip()
-            if not title or not text:
-                continue
-            pages.append((title, text))
-            if len(pages) >= max_pages:
+    if text_dir is not None:
+        paths = sorted(path for path in text_dir.rglob("*") if path.is_file())
+        for path in paths:
+            if max_records and len(records) >= max_records:
                 break
-    return pages
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            if text.strip():
+                records.append((rel_path(path, text_dir), text))
+        return records
+
+    raise ValueError("Provide --corpus-jsonl or --text-dir as the benchmark corpus source.")
 
 
 def make_chunks(
-    pages: list[tuple[str, str]],
+    records: list[tuple[str, str]],
     chunk_chars: int,
     overlap_chars: int,
 ) -> list[Chunk]:
     chunks: list[Chunk] = []
-    for page_idx, (title, text) in enumerate(pages):
+    for source_idx, (title, text) in enumerate(records):
         body = f"{title}\n\n{text}"
         if len(body) <= chunk_chars:
-            chunks.append(Chunk(len(chunks), title, body, page_idx, 0))
+            chunks.append(Chunk(len(chunks), title, body, source_idx, 0))
             continue
 
         start = 0
@@ -166,7 +170,7 @@ def make_chunks(
         step = max(1, chunk_chars - overlap_chars)
         while start < len(body):
             part = body[start : start + chunk_chars]
-            chunks.append(Chunk(len(chunks), title, part, page_idx, local_idx))
+            chunks.append(Chunk(len(chunks), title, part, source_idx, local_idx))
             local_idx += 1
             if start + chunk_chars >= len(body):
                 break
@@ -753,7 +757,7 @@ def build_spectrum_store(
             "path": rel_path(spec_path, out_dir),
             "name": f"chunk_{chunk.id:06d}",
             "title": chunk.title,
-            "page_index": chunk.page_index,
+            "source_index": chunk.source_index,
             "chunk_index": chunk.chunk_index,
             "language_id": LANGUAGE_TEXT,
             "orig_length": len(chunk.text.encode("utf-8")),
@@ -989,7 +993,7 @@ def write_report(out_dir: Path, report: dict) -> None:
         "",
         "## Corpus",
         "",
-        f"- Pages: {report['corpus']['pages']:,}",
+        f"- Records: {report['corpus']['records']:,}",
         f"- Chunks: {report['corpus']['chunks']:,}",
         f"- Raw chunk bytes: {report['corpus']['raw_bytes']:,}",
         f"- Spectrum BM25: k1={report['settings']['spectrum_k1']}, b={report['settings']['spectrum_b']}, max_df_ratio={report['settings']['spectrum_max_df_ratio']}, title_boost={report['settings']['spectrum_title_boost']}",
@@ -1066,7 +1070,7 @@ def append_benchmark_log(log_path: Path, report: dict, change_note: str) -> None
         "",
         f"**Change note:** {change_note.strip() or 'No change note supplied.'}",
         "",
-        f"**Run:** `{settings['page_index']}`, pages={corpus['pages']:,}, "
+        f"**Run:** `{settings['corpus_jsonl'] or settings['text_dir']}`, records={corpus['records']:,}, "
         f"chunks={corpus['chunks']:,}, raw={corpus['raw_bytes']:,} bytes, "
         f"chunk_chars={settings['chunk_chars']:,}, overlap={settings['overlap_chars']:,}, "
         f"queries={settings['queries']:,}, top_k={top_k}, "
@@ -1106,12 +1110,14 @@ def run(args: argparse.Namespace) -> dict:
     out_dir = Path(args.out_dir)
     reset_dir(out_dir)
 
-    page_index = Path(args.page_index)
-    print(f"[storage-bench] extracting pages from {page_index}")
-    pages = extract_wiki_pages(page_index, max_pages=args.max_pages)
-    chunks = make_chunks(pages, args.chunk_chars, args.overlap_chars)
+    corpus_jsonl = Path(args.corpus_jsonl) if args.corpus_jsonl else None
+    text_dir = Path(args.text_dir) if args.text_dir else None
+    source_label = str(corpus_jsonl or text_dir)
+    print(f"[storage-bench] loading corpus from {source_label}")
+    records = load_corpus_records(corpus_jsonl, text_dir, max_records=args.max_records)
+    chunks = make_chunks(records, args.chunk_chars, args.overlap_chars)
     raw_bytes = sum(len(chunk.text.encode("utf-8")) for chunk in chunks)
-    print(f"[storage-bench] corpus: {len(pages):,} pages, {len(chunks):,} chunks, {raw_bytes:,} bytes")
+    print(f"[storage-bench] corpus: {len(records):,} records, {len(chunks):,} chunks, {raw_bytes:,} bytes")
 
     conventional_dir = out_dir / "conventional_tfidf"
     spectrum_dir = out_dir / "spectrum_spec"
@@ -1168,8 +1174,9 @@ def run(args: argparse.Namespace) -> dict:
     report = {
         "format": "spectrum-rag-storage-benchmark-v1",
         "settings": {
-            "page_index": str(page_index),
-            "max_pages": args.max_pages,
+            "corpus_jsonl": str(corpus_jsonl) if corpus_jsonl else None,
+            "text_dir": str(text_dir) if text_dir else None,
+            "max_records": args.max_records,
             "chunk_chars": args.chunk_chars,
             "overlap_chars": args.overlap_chars,
             "queries": len(queries),
@@ -1184,7 +1191,7 @@ def run(args: argparse.Namespace) -> dict:
             "postings_format": args.postings_format,
         },
         "corpus": {
-            "pages": len(pages),
+            "records": len(records),
             "chunks": len(chunks),
             "raw_bytes": raw_bytes,
         },
@@ -1240,12 +1247,13 @@ def run(args: argparse.Namespace) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark conventional RAG storage vs Spectrum RAG storage.")
     parser.add_argument(
-        "--page-index",
-        default="wiki_enwiki_fullxml_sample/page_index.json",
-        help="Spectrum Wiki page_index.json to use as the source corpus.",
+        "--corpus-jsonl",
+        default="",
+        help="JSONL corpus source. Each line should contain text/content and optionally title/path.",
     )
+    parser.add_argument("--text-dir", default="", help="Directory of UTF-8 text files to use as a corpus source.")
     parser.add_argument("--out-dir", default="benchmarks/generated/storage_benchmark", help="Output benchmark directory.")
-    parser.add_argument("--max-pages", type=int, default=200, help="Maximum wiki pages to extract.")
+    parser.add_argument("--max-records", type=int, default=200, help="Maximum corpus records/files to load; 0 means no limit.")
     parser.add_argument("--chunk-chars", type=int, default=1800, help="Characters per RAG chunk.")
     parser.add_argument("--overlap-chars", type=int, default=180, help="Character overlap between chunks.")
     parser.add_argument("--queries", type=int, default=50, help="Number of generated title/content queries.")

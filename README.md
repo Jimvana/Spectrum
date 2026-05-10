@@ -23,7 +23,7 @@ Current dictionary support includes:
 * SQL
 * Rust
 * PHP
-* XML / Wiki
+* XML-compatible payloads
 * Java
 * C / C++
 * Go

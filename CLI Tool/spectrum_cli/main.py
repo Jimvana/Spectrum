@@ -61,6 +61,10 @@ from spec_format.spec_encoder import (
     LANGUAGE_TS,
     LANGUAGE_XML,
     LANGUAGE_YAML,
+    DEFAULT_RLE_BLOCK_SIZE,
+    DEFAULT_RLE_MIN_SAVINGS,
+    RLE_MODE_OFF,
+    RLE_MODES,
     encode_file,
 )
 
@@ -149,7 +153,7 @@ LANG_NAMES = {
     LANGUAGE_SQL: "SQL",
     LANGUAGE_RUST: "Rust",
     LANGUAGE_PHP: "PHP",
-    LANGUAGE_XML: "XML/Wiki",
+    LANGUAGE_XML: "XML-compatible",
     LANGUAGE_JAVA: "Java",
     LANGUAGE_C: "C",
     LANGUAGE_CPP: "C++",
@@ -242,14 +246,24 @@ def default_spec_output(source: Path, base: Path | None = None, out_dir: Path | 
     return out_dir / Path(str(rel) + ".spec")
 
 
-def encode_one(source: Path, output: Path, lang: str | None, no_rle: bool, zlib_level: int) -> EncodeResult:
+def encode_one(
+    source: Path,
+    output: Path,
+    lang: str | None,
+    rle_mode: str,
+    zlib_level: int,
+    rle_min_savings: float,
+    rle_block_size: int,
+) -> EncodeResult:
     language_id = LANG_MAP[lang] if lang else LANGUAGE_PYTHON
     stats = encode_file(
         str(source),
         str(output),
-        use_rle=not no_rle,
+        use_rle=rle_mode,
         language_id=language_id,
         zlib_level=zlib_level,
+        rle_min_savings=rle_min_savings,
+        rle_block_size=rle_block_size,
     )
     return EncodeResult(
         source=source,
@@ -305,6 +319,7 @@ def command_encode(args: argparse.Namespace) -> int:
     source = Path(args.input).expanduser().resolve()
     if not source.exists():
         die(f"input not found: {source}")
+    rle_mode = RLE_MODE_OFF if args.no_rle else args.rle
 
     if args.archive:
         if source.is_file():
@@ -327,7 +342,15 @@ def command_encode(args: argparse.Namespace) -> int:
                 rel = file_path.relative_to(base) if source.is_dir() else Path(file_path.name)
                 spec_rel = Path("files") / Path(str(rel) + ".spec")
                 spec_path = tmp / spec_rel
-                result = encode_one(file_path, spec_path, args.lang, args.no_rle, args.zlib_level)
+                result = encode_one(
+                    file_path,
+                    spec_path,
+                    args.lang,
+                    rle_mode,
+                    args.zlib_level,
+                    args.rle_min_savings,
+                    args.rle_block_size,
+                )
                 total_original += result.original_size
                 total_spec += result.spec_size
                 entries.append(
@@ -364,7 +387,15 @@ def command_encode(args: argparse.Namespace) -> int:
     out_dir = Path(args.output).expanduser().resolve() if args.output and source.is_dir() else None
     if source.is_file():
         output = Path(args.output).expanduser().resolve() if args.output else default_spec_output(source)
-        encode_one(source, output, args.lang, args.no_rle, args.zlib_level)
+        encode_one(
+            source,
+            output,
+            args.lang,
+            rle_mode,
+            args.zlib_level,
+            args.rle_min_savings,
+            args.rle_block_size,
+        )
         if args.index:
             build_index_for_target(output)
         return 0
@@ -377,7 +408,15 @@ def command_encode(args: argparse.Namespace) -> int:
     total_spec = 0
     for file_path in files:
         output = default_spec_output(file_path, base=source, out_dir=output_root)
-        result = encode_one(file_path, output, args.lang, args.no_rle, args.zlib_level)
+        result = encode_one(
+            file_path,
+            output,
+            args.lang,
+            rle_mode,
+            args.zlib_level,
+            args.rle_min_savings,
+            args.rle_block_size,
+        )
         total_original += result.original_size
         total_spec += result.spec_size
     print(f"Encoded {len(files)} files -> {output_root} ({total_original:,} B -> {total_spec:,} B)")
@@ -1027,7 +1066,10 @@ def build_parser() -> argparse.ArgumentParser:
     encode.add_argument("--index", action="store_true", help="Build a search index after encoding; archives embed it")
     encode.add_argument("--all", action="store_true", help="Include every non-.spec file in folders")
     encode.add_argument("--lang", choices=sorted(LANG_MAP), help="Force language instead of extension detection")
-    encode.add_argument("--no-rle", action="store_true", help="Disable RLE compression")
+    encode.add_argument("--no-rle", action="store_true", help="Deprecated alias for --rle=off")
+    encode.add_argument("--rle", choices=RLE_MODES, default=RLE_MODE_OFF, help="RLE mode: off (default), auto, or force")
+    encode.add_argument("--rle-min-savings", type=float, default=DEFAULT_RLE_MIN_SAVINGS, help="Minimum per-block ID savings ratio for --rle=auto")
+    encode.add_argument("--rle-block-size", type=int, default=DEFAULT_RLE_BLOCK_SIZE, help="ID block size for --rle=auto")
     encode.add_argument("--zlib-level", type=int, default=9, choices=range(1, 10), metavar="1-9", help="zlib compression level")
     encode.set_defaults(func=command_encode)
 

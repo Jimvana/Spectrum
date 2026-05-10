@@ -1,9 +1,8 @@
 """
 Codebase RAG storage benchmark: conventional raw-code TF-IDF vs Spectrum .spec.
 
-This is intentionally separate from the Wiki benchmark. Code retrieval needs
-path, filename, and identifier signals that are not always represented as core
-dictionary tokens in the lossless payload.
+Code retrieval needs path, filename, and identifier signals that are not always
+represented as core dictionary tokens in the lossless payload.
 """
 
 from __future__ import annotations
@@ -177,11 +176,6 @@ DEFAULT_EXCLUDE_DIRS = {
     "output_images",
     "results",
     "spec compressed",
-    "wiki_enwiki_dump",
-    "wiki_enwiki_fullxml_1hr",
-    "wiki_enwiki_fullxml_sample",
-    "wiki_enwiki_raw_10pct",
-    "wiki_enwiki_raw_sample",
 }
 DEFAULT_EXCLUDE_PREFIXES = (
     "codebase_benchmark",

@@ -29,7 +29,7 @@ Design rules:
   - PHP functions: warm-sand/light family    R=245, B=100
 
 Version: 12  (adds C, C++, Go, C#, shell, JSON, YAML, and TOML support.
-              Covers Python, HTML, JS, TS, CSS, SQL, Rust, PHP, XML/Wiki,
+              Covers Python, HTML, JS, TS, CSS, SQL, Rust, PHP, XML-compatible,
               Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English text.)
 
 RLE design:

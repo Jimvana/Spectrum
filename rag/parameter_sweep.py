@@ -318,7 +318,7 @@ def main() -> int:
     parser.add_argument("--benchmark-dir", default="benchmarks/generated/storage_benchmark_6k_full_current")
     parser.add_argument("--queries", default="", help="Optional query JSON path. Defaults to benchmark-dir/queries.json.")
     parser.add_argument("--out-dir", default="benchmarks/generated/parameter_sweep")
-    parser.add_argument("--profile", default="wiki-full-xml")
+    parser.add_argument("--profile", default="code-mixed")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--top-n", type=int, default=25)
     parser.add_argument("--k1", default="0.9,1.2,1.5,1.8,2.1")

@@ -44,7 +44,7 @@ LANGUAGE_NAMES = {
     6: "SQL",
     7: "Rust",
     8: "PHP",
-    9: "XML/Wiki",
+    9: "XML-compatible",
     10: "Java",
     11: "C",
     12: "C++",

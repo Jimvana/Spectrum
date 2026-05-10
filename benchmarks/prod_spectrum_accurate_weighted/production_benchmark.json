@@ -1,0 +1,46 @@
+{
+  "format": "spectrum-production-engine-benchmark-v1",
+  "settings": {
+    "benchmark_dir": "C:\\Users\\james\\Desktop\\2rep",
+    "out_dir": "C:\\Users\\james\\Desktop\\2rep\\prod_spectrum_accurate_weighted",
+    "queries": 80,
+    "top_k": 5,
+    "hydrate_limit": 5,
+    "engines": [
+      "spectrum_serving"
+    ],
+    "spectrum_rerank": "accurate",
+    "spectrum_rerank_candidates": 50
+  },
+  "corpus": {
+    "docs": 72601,
+    "raw_bytes": 1028410590
+  },
+  "engines": [
+    {
+      "name": "spectrum_serving_pipeline",
+      "status": "ok",
+      "build_seconds": 58.0655,
+      "build_cpu_seconds": 57.8125,
+      "index_bytes": 413915926,
+      "error": "",
+      "metrics": {
+        "hit_at_1": 0.7375,
+        "recall_at_5": 0.75,
+        "mrr": 0.7438,
+        "avg_query_ms": 3.0813,
+        "p95_query_ms": 5.8026,
+        "avg_hydrate_ms": 3.1907,
+        "p95_hydrate_ms": 3.5362,
+        "avg_end_to_end_ms": 6.272,
+        "p95_end_to_end_ms": 7.6981,
+        "avg_cpu_query_ms": 3.5156,
+        "avg_cpu_hydrate_ms": 2.7344,
+        "avg_cpu_end_to_end_ms": 6.25,
+        "cpu_utilization_pct": 99.65,
+        "avg_hydrated_bytes": 10521.9,
+        "hydrate_limit": 5
+      }
+    }
+  ]
+}

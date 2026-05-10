@@ -36,6 +36,7 @@ wiki_enwiki_raw_sample/
 
 # Generated benchmark and encoding outputs
 benchmarks/generated/
+benchmarks/prod_spectrum_*/spectrum_serving_pipeline/snippet_sidecar.json
 demo/runs/
 demo/workspaces/
 CLI Tool/coding-interview-university-main/
