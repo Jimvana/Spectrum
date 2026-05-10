@@ -358,8 +358,8 @@ def encode_file(source_path: str, output_path: str,
     source_path  = Path(source_path)
     output_path  = Path(output_path)
 
-    source        = source_path.read_text(encoding="utf-8", errors="replace")
-    source_bytes  = source.encode("utf-8")
+    source_bytes  = source_path.read_bytes()
+    source        = source_bytes.decode("utf-8", errors="replace")
     original_size = len(source_bytes)
     checksum      = sum(source_bytes) & 0xFFFF
 

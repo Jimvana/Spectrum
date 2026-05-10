@@ -103,6 +103,20 @@ The project currently focuses on:
 * retrieval-aware compression,
 * and production-shaped benchmark pipelines for large code corpora.
 
+## Ecosystem Layout
+
+New ecosystem work lives under `packages/`, with each element in its own subdirectory:
+
+* `packages/core` for the open format, encode/decode, pack IO, and validation.
+* `packages/cli` for command line workflows.
+* `packages/sdk-js` and `packages/sdk-python` for official SDKs.
+* `packages/server` and `packages/dashboard` for the local API and UI.
+* `packages/memory` and `packages/index` for agent memory and retrieval.
+* `packages/connectors` and `packages/integrations` for data imports and framework adapters.
+* `packages/cloud` for optional hosted/team experiments.
+
+The full ecosystem plan is tracked in `docs/ecosystem_architecture.md`.
+
 ## Try The Demo
 
 Install or update the local CLI from this checkout:

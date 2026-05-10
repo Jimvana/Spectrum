@@ -25,7 +25,6 @@ import tokenize
 import io
 import struct
 from pathlib import Path
-from PIL import Image
 
 # Allow imports from parent directory (where dictionary.py lives)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -84,7 +83,7 @@ def tokenise_source(source: str) -> list[str]:
 
         # Emit the token itself
         if tok_type == tokenize.NEWLINE or tok_type == tokenize.NL:
-            tokens.append("\n")
+            tokens.append(tok_string)
         elif tok_type == tokenize.INDENT:
             for ch in tok_string:
                 tokens.append(ch)
@@ -223,13 +222,15 @@ def build_header_row(dict_version: int, original_length: int,
 
 def pixels_to_image(data_pixels: list[tuple[int, int, int]],
                     header_row: list[tuple[int, int, int]],
-                    width: int) -> Image.Image:
+                    width: int):
     """
     Pack header + data pixels into a PIL Image.
 
     Rows: [header_row] + [data rows...]
     Data rows are padded with __PAD__ pixels to fill the last row.
     """
+    from PIL import Image
+
     pad_pixel = D.SPECIAL["__PAD__"]
 
     # Pad data to a full number of rows

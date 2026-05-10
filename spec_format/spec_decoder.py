@@ -243,7 +243,7 @@ def decode_file(spec_path: str, output_path: str) -> dict:
 
     # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(source, encoding="utf-8")
+    output_path.write_bytes(source.encode("utf-8"))
 
     length_ok = (decoded_length == orig_length)
     fidelity  = "✓ perfect" if (length_ok and cksum_ok) else "✗ mismatch"
