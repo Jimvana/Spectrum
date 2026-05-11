@@ -2,6 +2,34 @@
 
 Spectrum is a deterministic retrieval-aware encoding layer for compact, lossless, searchable code and text stores.
 
+## Spectrum Store Developer Preview
+
+The first turnkey product surface is **Spectrum Store Developer Preview**: a
+local-first command line tool for creating compact, lossless, searchable
+`.specpack` stores from folders of code or text.
+
+Install from a local checkout:
+
+```powershell
+npm install -g . --force
+```
+
+Then run the core workflow:
+
+```powershell
+spectrum pack ./docs ./docs.specpack --json
+spectrum verify ./docs.specpack --json
+spectrum index ./docs.specpack --embed --json
+spectrum search ./docs.specpack "authentication middleware" --top 5 --json
+spectrum unpack ./docs.specpack ./docs-restored --json
+```
+
+The package name is `spectrumstore`, and it exposes both `spectrum` and
+`spectrumstore` commands. It requires Node.js 18+ and Python 3.10+ on `PATH`;
+the preview npm package bundles the Python Spectrum CLI, index layer, core API,
+and current codec runtime so users do not need to set `PYTHONPATH` or
+`SPECTRUM_REPO_ROOT` manually.
+
 The project explores a simple idea:
 
 > The compressed artifact and the retrieval representation can be the same thing.

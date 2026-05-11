@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.gitignore
+benchmarks/generated/
+demo/runs/
+demo/workspaces/
+*.spec
+*.specpack
+node_modules/
