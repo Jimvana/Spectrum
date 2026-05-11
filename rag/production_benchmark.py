@@ -34,6 +34,11 @@ from rag.spectrum_serving import (
     DEFAULT_SERVING_K1,
     DEFAULT_SERVING_MAX_DF_RATIO,
     DEFAULT_SERVING_TITLE_BOOST,
+    DEFAULT_DECODE_CACHE_BYTES,
+    DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES,
+    DECODE_POLICY_AUTO,
+    DECODE_POLICY_EXACT,
+    DECODE_POLICY_NONE,
     SpectrumServingRetriever,
     code_rerank_profile,
     expand_query_aliases,
@@ -117,6 +122,45 @@ def percentile(values: list[float], pct: float) -> float:
     ordered = sorted(values)
     idx = min(len(ordered) - 1, math.ceil((pct / 100) * len(ordered)) - 1)
     return ordered[idx]
+
+
+def _doc_label(doc: CorpusDoc | None) -> dict:
+    if doc is None:
+        return {"title": "", "path": ""}
+    return {"title": doc.title, "path": doc.path}
+
+
+def _hydration_trace(engine: SearchEngine, docs_by_id: dict[int, CorpusDoc], doc_ids: list[int], payloads: list[str]) -> list[dict]:
+    trace = getattr(engine, "last_hydration_trace", None)
+    if trace is not None:
+        return trace
+    rows = []
+    for doc_id, payload in zip(doc_ids, payloads):
+        doc = docs_by_id.get(doc_id)
+        rows.append({
+            "doc_id": doc_id,
+            **_doc_label(doc),
+            "payload_bytes": len(payload.encode("utf-8")),
+        })
+    return rows
+
+
+def _slowest_queries(per_query: list[dict], field: str, limit: int = 10) -> list[dict]:
+    rows = sorted(per_query, key=lambda item: float(item.get(field, 0.0)), reverse=True)[:limit]
+    return [
+        {
+            "query": row["query"],
+            "query_type": row["query_type"],
+            "rank": row["rank"],
+            "result_ids": row["result_ids"],
+            "search_ms": row["search_ms"],
+            "hydrate_ms": row["hydrate_ms"],
+            "end_to_end_ms": row["end_to_end_ms"],
+            "hydrated_bytes": row["hydrated_bytes"],
+            "hydration": row["hydration"],
+        }
+        for row in rows
+    ]
 
 
 def load_corpus(benchmark_dir: Path) -> list[CorpusDoc]:
@@ -208,6 +252,7 @@ def evaluate_engine(
     hydrated_bytes = []
     per_query = []
     grouped: dict[str, dict] = {}
+    docs_by_id = {doc.id: doc for doc in docs}
 
     def group_state(name: str) -> dict:
         if name not in grouped:
@@ -228,13 +273,15 @@ def evaluate_engine(
         payloads = engine.hydrate(ids_to_hydrate)
         hydrate_done = time.perf_counter()
         cpu_hydrate_done = time.process_time()
+        query_hydrated_bytes = sum(len(payload.encode("utf-8")) for payload in payloads)
+        hydration = _hydration_trace(engine, docs_by_id, ids_to_hydrate, payloads)
         latencies.append((search_done - started) * 1000)
         hydrate_latencies.append((hydrate_done - search_done) * 1000)
         end_to_end_latencies.append((hydrate_done - started) * 1000)
         cpu_search_latencies.append((cpu_search_done - cpu_started) * 1000)
         cpu_hydrate_latencies.append((cpu_hydrate_done - cpu_search_done) * 1000)
         cpu_latencies.append((cpu_hydrate_done - cpu_started) * 1000)
-        hydrated_bytes.append(sum(len(payload.encode("utf-8")) for payload in payloads))
+        hydrated_bytes.append(query_hydrated_bytes)
         if result_ids and result_ids[0] in relevant:
             hit1 += 1
             group["hit1"] += 1
@@ -252,6 +299,9 @@ def evaluate_engine(
             "rank": rank,
             "search_ms": round((search_done - started) * 1000, 4),
             "hydrate_ms": round((hydrate_done - search_done) * 1000, 4),
+            "end_to_end_ms": round((hydrate_done - started) * 1000, 4),
+            "hydrated_bytes": query_hydrated_bytes,
+            "hydration": hydration,
             "diagnostics": engine.explain(str(item["query"]), result_ids) if hasattr(engine, "explain") else {},
         })
 
@@ -277,6 +327,8 @@ def evaluate_engine(
         ),
         "avg_hydrated_bytes": round(mean(hydrated_bytes) if hydrated_bytes else 0.0, 2),
         "hydrate_limit": hydrate_limit if hydrate_limit is not None else top_k,
+        "slowest_hydration_queries": _slowest_queries(per_query, "hydrate_ms"),
+        "slowest_end_to_end_queries": _slowest_queries(per_query, "end_to_end_ms"),
         "by_query_type": {
             name: {
                 "queries": values["count"],
@@ -294,9 +346,24 @@ def evaluate_engine(
 class RawHydrationMixin:
     def build_hydrator(self, docs: list[CorpusDoc]) -> None:
         self.docs_by_id = {doc.id: doc.text for doc in docs}
+        self.docs_meta_by_id = {doc.id: doc for doc in docs}
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
-        return [self.docs_by_id[doc_id] for doc_id in doc_ids if doc_id in self.docs_by_id]
+        payloads = []
+        trace = []
+        for doc_id in doc_ids:
+            payload = self.docs_by_id.get(doc_id)
+            if payload is None:
+                continue
+            doc = self.docs_meta_by_id.get(doc_id)
+            payloads.append(payload)
+            trace.append({
+                "doc_id": doc_id,
+                **_doc_label(doc),
+                "payload_bytes": len(payload.encode("utf-8")),
+            })
+        self.last_hydration_trace = trace
+        return payloads
 
 
 class TfidfEngine(RawHydrationMixin):
@@ -454,9 +521,21 @@ class SpectrumBM25Engine:
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         payloads = []
+        trace = []
         for doc_id in doc_ids:
+            doc = self.docs_meta_by_id.get(doc_id, {})
             if self.cache_hydration and doc_id in self.hydration_cache:
-                payloads.append(self.hydration_cache[doc_id])
+                payload = self.hydration_cache[doc_id]
+                payloads.append(payload)
+                trace.append({
+                    "doc_id": doc_id,
+                    "title": doc.get("title", ""),
+                    "path": doc.get("source_path", doc.get("title", "")),
+                    "spec_bytes": len(self.spec_bytes.get(doc_id, b"")) if doc_id in self.spec_bytes else None,
+                    "payload_bytes": len(payload.encode("utf-8")),
+                    "cache_hit": True,
+                    "decode_ms": 0.0,
+                })
                 continue
             path = self.spec_paths.get(doc_id)
             if path is not None:
@@ -469,13 +548,25 @@ class SpectrumBM25Engine:
                 data = self.spec_bytes.get(doc_id)
                 if data is None:
                     data = path.read_bytes()
+                decode_started = time.perf_counter()
                 try:
                     payload = decoder(data)
                 except NativeDecoderUnavailable:
                     payload = decode_code_spec_bytes_fast(data)
+                decode_ms = (time.perf_counter() - decode_started) * 1000
                 if self.cache_hydration:
                     self.hydration_cache[doc_id] = payload
                 payloads.append(payload)
+                trace.append({
+                    "doc_id": doc_id,
+                    "title": doc.get("title", ""),
+                    "path": doc.get("source_path", doc.get("title", "")),
+                    "spec_bytes": len(data),
+                    "payload_bytes": len(payload.encode("utf-8")),
+                    "cache_hit": False,
+                    "decode_ms": round(decode_ms, 4),
+                })
+        self.last_hydration_trace = trace
         return payloads
 
 
@@ -502,11 +593,23 @@ class SpectrumSnippetSidecarEngine(SpectrumBM25Engine):
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         query = getattr(self, "last_query", "")
-        return [
-            windowed_snippet(self.snippets_by_id[doc_id], query, self.snippet_chars)
-            for doc_id in doc_ids
-            if doc_id in self.snippets_by_id
-        ]
+        payloads = []
+        trace = []
+        for doc_id in doc_ids:
+            if doc_id not in self.snippets_by_id:
+                continue
+            snippet = windowed_snippet(self.snippets_by_id[doc_id], query, self.snippet_chars)
+            doc = self.docs_meta_by_id.get(doc_id, {})
+            payloads.append(snippet)
+            trace.append({
+                "doc_id": doc_id,
+                "title": doc.get("title", ""),
+                "path": doc.get("source_path", doc.get("title", "")),
+                "payload_bytes": len(snippet.encode("utf-8")),
+                "snippet_only": True,
+            })
+        self.last_hydration_trace = trace
+        return payloads
 
 
 class SpectrumServingPipelineEngine:
@@ -517,12 +620,18 @@ class SpectrumServingPipelineEngine:
         preload_specs: bool = True,
         native_decode: bool = False,
         rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
+        decode_cache_bytes: int = DEFAULT_DECODE_CACHE_BYTES,
+        max_auto_decode_spec_bytes: int | None = DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES,
+        decode_policy: str = DECODE_POLICY_AUTO,
     ):
         self.benchmark_dir = benchmark_dir
         self.name = name
         self.preload_specs = preload_specs
         self.native_decode = native_decode
         self.rerank_profile = rerank_profile
+        self.decode_cache_bytes = decode_cache_bytes
+        self.max_auto_decode_spec_bytes = max_auto_decode_spec_bytes
+        self.decode_policy = decode_policy
 
     def build(self, docs: list[CorpusDoc], work_dir: Path) -> EngineReport:
         if self.native_decode and not native_decoder_available():
@@ -537,7 +646,7 @@ class SpectrumServingPipelineEngine:
         full_decoder = (
             decode_code_spec_bytes_native_or_fast
             if self.native_decode
-            else decode_code_spec_bytes_fast
+            else decode_code_spec_bytes_native_or_fast
         )
         self.retriever = SpectrumServingRetriever.from_codebase_benchmark(
             self.benchmark_dir,
@@ -545,6 +654,8 @@ class SpectrumServingPipelineEngine:
             preload_specs=self.preload_specs,
             rerank_profile=self.rerank_profile,
             full_decoder=full_decoder,
+            decode_cache_bytes=self.decode_cache_bytes,
+            max_auto_decode_spec_bytes=self.max_auto_decode_spec_bytes,
         )
         store_bytes = dir_size(self.benchmark_dir / "spectrum_spec")
         sidecar_bytes = sidecar_path.stat().st_size if sidecar_path.exists() else 0
@@ -580,13 +691,47 @@ class SpectrumServingPipelineEngine:
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         if not doc_ids:
+            self.last_hydration_trace = []
             return []
         snippets = [
             result.snippet
             for result in getattr(self, "last_results", [])
             if result.id in set(doc_ids)
         ]
-        selected = self.retriever.decode(doc_ids[0]).text
+        selected_snippet = next(
+            (result.snippet for result in getattr(self, "last_results", []) if result.id == doc_ids[0]),
+            "",
+        )
+        selected_payload = self.retriever.decode(
+            doc_ids[0],
+            fallback_text=selected_snippet,
+            decode_policy=self.decode_policy,
+        )
+        selected = selected_payload.text
+        self.last_hydration_trace = [
+            {
+                "doc_id": result.id,
+                "title": result.title,
+                "path": result.source_path,
+                "payload_bytes": len(result.snippet.encode("utf-8")),
+                "snippet_only": True,
+            }
+            for result in getattr(self, "last_results", [])
+            if result.id in set(doc_ids)
+        ]
+        self.last_hydration_trace.append({
+            "doc_id": selected_payload.id,
+            "title": selected_payload.title,
+            "path": selected_payload.source_path,
+            "payload_bytes": len(selected.encode("utf-8")),
+            "spec_bytes": selected_payload.spec_bytes,
+            "cache_hit": selected_payload.cache_hit,
+            "decode_ms": round(selected_payload.decode_ms, 4),
+            "deferred": selected_payload.deferred,
+            "defer_reason": selected_payload.defer_reason,
+            "decode_policy": selected_payload.decode_policy,
+            "selected_full_payload": not selected_payload.deferred,
+        })
         return snippets + [selected]
 
 
@@ -871,6 +1016,9 @@ def make_engines(
     names: list[str],
     benchmark_dir: Path,
     rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
+    decode_cache_bytes: int = DEFAULT_DECODE_CACHE_BYTES,
+    max_auto_decode_spec_bytes: int | None = DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES,
+    decode_policy: str = DECODE_POLICY_AUTO,
 ) -> list[SearchEngine]:
     factories = {
         "tfidf": lambda: TfidfEngine(),
@@ -930,18 +1078,27 @@ def make_engines(
         "spectrum_serving": lambda: SpectrumServingPipelineEngine(
             benchmark_dir,
             rerank_profile=rerank_profile,
+            decode_cache_bytes=decode_cache_bytes,
+            max_auto_decode_spec_bytes=max_auto_decode_spec_bytes,
+            decode_policy=decode_policy,
         ),
         "spectrum_serving_native": lambda: SpectrumServingPipelineEngine(
             benchmark_dir,
             name="spectrum_serving_pipeline_native",
             native_decode=True,
             rerank_profile=rerank_profile,
+            decode_cache_bytes=decode_cache_bytes,
+            max_auto_decode_spec_bytes=max_auto_decode_spec_bytes,
+            decode_policy=decode_policy,
         ),
         "spectrum_serving_ram": lambda: SpectrumServingPipelineEngine(
             benchmark_dir,
             name="spectrum_serving_pipeline_ram",
             preload_specs=True,
             rerank_profile=rerank_profile,
+            decode_cache_bytes=decode_cache_bytes,
+            max_auto_decode_spec_bytes=max_auto_decode_spec_bytes,
+            decode_policy=decode_policy,
         ),
         "dense_lsa": lambda: DenseLsaEngine(),
         "faiss": lambda: FaissLsaEngine(),
@@ -962,6 +1119,23 @@ def make_engines(
     return engines
 
 
+def parse_hydrate_limits(value: str) -> list[int | None]:
+    limits: list[int | None] = []
+    for raw in value.split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        parsed = int(item)
+        limits.append(None if parsed < 0 else parsed)
+    if not limits:
+        raise ValueError("Expected at least one hydrate limit")
+    return limits
+
+
+def hydrate_limit_label(value: int | None, top_k: int) -> str:
+    return str(top_k if value is None else value)
+
+
 def write_markdown(out_dir: Path, report: dict) -> None:
     top_k = report["settings"]["top_k"]
     lines = [
@@ -971,19 +1145,22 @@ def write_markdown(out_dir: Path, report: dict) -> None:
         f"- Docs: {report['corpus']['docs']:,}",
         f"- Queries: {report['settings']['queries']:,}",
         f"- Hydrate limit: {report['settings']['hydrate_limit']}",
+        f"- Decode policy: {report['settings'].get('decode_policy', '')}",
+        f"- Auto-decode threshold bytes: {report['settings'].get('max_auto_decode_spec_bytes', '')}",
         "",
         "## Results",
         "",
-        f"| Engine | Status | Hit@1 | MRR | Recall@{top_k} | Search ms | Hydrate ms | E2E ms | P95 E2E ms | CPU E2E ms | CPU util % | Build sec | Build CPU sec | Index bytes | Notes |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        f"| Engine | Hydrate limit | Status | Hit@1 | MRR | Recall@{top_k} | Search ms | Hydrate ms | P95 hydrate ms | E2E ms | P95 E2E ms | CPU E2E ms | CPU util % | Build sec | Build CPU sec | Index bytes | Notes |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in report["engines"]:
         metrics = row.get("metrics") or {}
         lines.append(
-            f"| {row['name']} | {row['status']} | "
+            f"| {row['name']} | {metrics.get('hydrate_limit', '')} | {row['status']} | "
             f"{metrics.get('hit_at_1', '')} | {metrics.get('mrr', '')} | "
             f"{metrics.get(f'recall_at_{top_k}', '')} | {metrics.get('avg_query_ms', '')} | "
-            f"{metrics.get('avg_hydrate_ms', '')} | {metrics.get('avg_end_to_end_ms', '')} | "
+            f"{metrics.get('avg_hydrate_ms', '')} | {metrics.get('p95_hydrate_ms', '')} | "
+            f"{metrics.get('avg_end_to_end_ms', '')} | "
             f"{metrics.get('p95_end_to_end_ms', '')} | {metrics.get('avg_cpu_end_to_end_ms', '')} | "
             f"{metrics.get('cpu_utilization_pct', '')} | {row.get('build_seconds', '')} | "
             f"{row.get('build_cpu_seconds', '')} | "
@@ -1000,8 +1177,8 @@ def write_markdown(out_dir: Path, report: dict) -> None:
             lines.extend([
                 f"### {qtype}",
                 "",
-                f"| Engine | Queries | Hit@1 | MRR | Recall@{top_k} |",
-                "|---|---:|---:|---:|---:|",
+                f"| Engine | Hydrate limit | Queries | Hit@1 | MRR | Recall@{top_k} |",
+                "|---|---:|---:|---:|---:|---:|",
             ])
             for row in report["engines"]:
                 metrics = row.get("metrics") or {}
@@ -1009,8 +1186,51 @@ def write_markdown(out_dir: Path, report: dict) -> None:
                 if not group:
                     continue
                 lines.append(
-                    f"| {row['name']} | {group['queries']} | {group['hit_at_1']} | "
+                    f"| {row['name']} | {metrics.get('hydrate_limit', '')} | {group['queries']} | {group['hit_at_1']} | "
                     f"{group['mrr']} | {group[f'recall_at_{top_k}']} |"
+                )
+            lines.append("")
+    outlier_rows = [
+        (
+            row,
+            [
+                item
+                for item in (row.get("metrics") or {}).get("slowest_hydration_queries", [])
+                if item.get("hydrated_bytes", 0) > 0
+            ][:3],
+        )
+        for row in report["engines"]
+    ]
+    outlier_rows = [(row, outliers) for row, outliers in outlier_rows if outliers]
+    if outlier_rows:
+        lines.extend(["", "## Hydration Tail Outliers", ""])
+        for row, outliers in outlier_rows:
+            metrics = row.get("metrics") or {}
+            lines.extend([
+                f"### {row['name']} hydrate-limit {metrics.get('hydrate_limit', '')}",
+                "",
+                "| Query | Hydrate ms | E2E ms | Bytes | First hydrated path | Decode ms | Cache |",
+                "|---|---:|---:|---:|---|---:|---|",
+            ])
+            for item in outliers:
+                hydration = item.get("hydration") or []
+                first = next(
+                    (
+                        row
+                        for row in hydration
+                        if row.get("selected_full_payload") or row.get("deferred")
+                    ),
+                    hydration[0] if hydration else {},
+                )
+                path = str(first.get("path", ""))[:120]
+                decode_ms = first.get("decode_ms", "")
+                cache = first.get("cache_hit", "")
+                if first.get("deferred"):
+                    cache = "deferred"
+                query = str(item.get("query", "")).replace("|", "\\|")[:120]
+                lines.append(
+                    f"| {query} | {item.get('hydrate_ms', '')} | {item.get('end_to_end_ms', '')} | "
+                    f"{item.get('hydrated_bytes', '')} | `{path}` | {decode_ms} | {cache} |"
                 )
             lines.append("")
     lines.extend([
@@ -1018,8 +1238,8 @@ def write_markdown(out_dir: Path, report: dict) -> None:
         "## Notes",
         "",
         "- `dense_lsa_numpy`, `faiss_lsa_flat`, and `chroma_lsa` use the same local LSA vectors so they measure vector-index plumbing, not frontier embedding quality.",
-        "- `Search ms` is retrieval only; `E2E ms` is retrieval plus hydration of the returned top-k payloads.",
-        "- Standard RAG engines hydrate from raw text already held in memory. Spectrum serving preloads `.spec` payload bytes into RAM, then byte-prism decodes selected payloads on demand.",
+        "- `Search ms` is retrieval only; `E2E ms` is retrieval plus hydration according to the selected hydrate limit and decode policy.",
+        "- Spectrum serving preloads `.spec` payload bytes into RAM, returns snippet sidecars for result lists, and applies the selected decode policy to the selected payload: `none`, `auto`, or `exact`.",
         "- `opensearch_bm25_http`, `zoekt_cli`, and `lucene_pyserini_bm25` are dependency-gated production adapters.",
         "- Use labelled human queries before treating these numbers as product-level retrieval claims.",
     ])
@@ -1041,16 +1261,35 @@ def run(args: argparse.Namespace) -> dict:
         args.spectrum_rerank,
         args.spectrum_rerank_candidates,
     )
-    engines = make_engines(args.engine, benchmark_dir, rerank_profile=rerank_profile)
-
+    decode_policy = DECODE_POLICY_EXACT if args.force_selected_decode else args.decode_policy
     reports = []
-    hydrate_limit = None if args.hydrate_limit < 0 else args.hydrate_limit
-    for engine in engines:
-        engine_dir = out_dir / engine.name
-        engine_dir.mkdir(parents=True, exist_ok=True)
-        result = evaluate_engine(engine, docs, queries, args.top_k, engine_dir, hydrate_limit)
-        reports.append(result.__dict__)
-        print(f"[prod-bench] {engine.name}: {result.status}")
+    hydrate_limits = (
+        parse_hydrate_limits(args.matrix_hydrate_limits)
+        if args.hydration_matrix
+        else [None if args.hydrate_limit < 0 else args.hydrate_limit]
+    )
+    for hydrate_limit in hydrate_limits:
+        engines = make_engines(
+            args.engine,
+            benchmark_dir,
+            rerank_profile=rerank_profile,
+            decode_cache_bytes=args.decode_cache_bytes,
+            max_auto_decode_spec_bytes=(
+                None
+                if args.max_auto_decode_spec_bytes < 0
+                else args.max_auto_decode_spec_bytes
+            ),
+            decode_policy=decode_policy,
+        )
+        for engine in engines:
+            limit_label = hydrate_limit_label(hydrate_limit, args.top_k)
+            engine_dir = out_dir / f"{engine.name}_hydrate_{limit_label}"
+            engine_dir.mkdir(parents=True, exist_ok=True)
+            result = evaluate_engine(engine, docs, queries, args.top_k, engine_dir, hydrate_limit)
+            row = result.__dict__
+            row["hydration_matrix_limit"] = hydrate_limit if hydrate_limit is not None else args.top_k
+            reports.append(row)
+            print(f"[prod-bench] {engine.name} hydrate={limit_label}: {result.status}")
 
     report = {
         "format": "spectrum-production-engine-benchmark-v1",
@@ -1059,7 +1298,17 @@ def run(args: argparse.Namespace) -> dict:
             "out_dir": str(out_dir),
             "queries": len(queries),
             "top_k": args.top_k,
-            "hydrate_limit": hydrate_limit if hydrate_limit is not None else args.top_k,
+            "hydrate_limit": hydrate_limit_label(hydrate_limits[0], args.top_k) if len(hydrate_limits) == 1 else "matrix",
+            "hydrate_limits": [hydrate_limit_label(value, args.top_k) for value in hydrate_limits],
+            "hydration_matrix": args.hydration_matrix,
+            "decode_cache_bytes": args.decode_cache_bytes,
+            "max_auto_decode_spec_bytes": (
+                None
+                if args.max_auto_decode_spec_bytes < 0
+                else args.max_auto_decode_spec_bytes
+            ),
+            "decode_policy": decode_policy,
+            "force_selected_decode": args.force_selected_decode,
             "engines": args.engine,
             "spectrum_rerank": args.spectrum_rerank,
             "spectrum_rerank_candidates": rerank_profile.candidates if rerank_profile else 0,
@@ -1094,8 +1343,41 @@ def main() -> int:
     parser.add_argument(
         "--hydrate-limit",
         type=int,
-        default=-1,
+        default=1,
         help="Number of returned docs to hydrate; -1 hydrates top-k, 1 simulates final-result-only hydration, 0 measures search only.",
+    )
+    parser.add_argument(
+        "--hydration-matrix",
+        action="store_true",
+        help="Run each selected engine against multiple hydrate limits in one report.",
+    )
+    parser.add_argument(
+        "--matrix-hydrate-limits",
+        default="0,1,5",
+        help="Comma-separated hydrate limits for --hydration-matrix; use -1 for top-k.",
+    )
+    parser.add_argument(
+        "--decode-cache-bytes",
+        type=int,
+        default=DEFAULT_DECODE_CACHE_BYTES,
+        help="Maximum decoded-payload LRU cache size for Spectrum serving engines.",
+    )
+    parser.add_argument(
+        "--max-auto-decode-spec-bytes",
+        type=int,
+        default=DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES,
+        help="Largest selected .spec payload to auto-decode in Spectrum serving; -1 disables deferral.",
+    )
+    parser.add_argument(
+        "--decode-policy",
+        choices=[DECODE_POLICY_NONE, DECODE_POLICY_AUTO, DECODE_POLICY_EXACT],
+        default=DECODE_POLICY_AUTO,
+        help="Selected-result decode policy for Spectrum serving: none=snippets only, auto=threshold-aware, exact=always full decode.",
+    )
+    parser.add_argument(
+        "--force-selected-decode",
+        action="store_true",
+        help="Backwards-compatible alias for --decode-policy exact.",
     )
     parser.add_argument(
         "--spectrum-rerank",

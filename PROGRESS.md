@@ -23,6 +23,20 @@ backwards compatibility and dictionary coverage.
   demand.
 - Code-aware reranking over bounded candidates with path, filename, identifier,
   structure, and proximity signals.
+- Bounded path/title fallback for Spectrum serving zero-candidate queries. On
+  the 72,601-document Linux-scale corpus, the latest `accurate` serving run
+  reached Hit@1 0.8500, Recall@5 0.8750, avg query 3.75 ms, avg E2E 8.53 ms,
+  and P95 E2E 32.41 ms.
+- Hydration-tail controls for Spectrum serving: selected-result hydration is
+  the benchmark default, decoded full payloads use a byte-bounded LRU cache,
+  standard serving uses native decode when available with Python fallback, and
+  selected decode is controlled by explicit policies: `none`, `auto`, and
+  `exact`. The default `auto` policy defers selected `.spec` payloads above the
+  16 KiB auto-decode threshold to the snippet/metadata path unless exact decode
+  is requested. On the same 72,601-document corpus, the 16 KiB policy kept
+  Hit@1 0.8500 and Recall@5 0.8750 while moving avg E2E from 8.53 ms to 4.78
+  ms and P95 E2E from 32.41 ms to 6.35 ms versus the earlier hydrate-limit 5
+  README run.
 
 ## Current Focus
 
@@ -38,6 +52,10 @@ backwards compatibility and dictionary coverage.
 - Mixed code/document retrieval quality.
 - Human-labelled query sets.
 - Stronger baseline comparisons.
+- Re-run the large-corpus hydration matrix with the new selected-result,
+  cache-bounded, size-aware serving policy. The fallback search regression is
+  fixed; the next measurement should confirm how much of the remaining P95 E2E
+  tail comes from exact decode versus intentionally deferred oversized payloads.
 - Native acceleration where decode cost dominates.
 - Keeping retrieval sidecars separate from the lossless `.spec` payload.
 

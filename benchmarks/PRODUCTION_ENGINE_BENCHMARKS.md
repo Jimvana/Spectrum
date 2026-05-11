@@ -23,6 +23,9 @@ captures:
 - Recall@K
 - average query latency
 - p95 query latency
+- average and p95 hydration latency
+- selected-payload decode outliers with path, payload size, cache hit, and
+  decode time
 - build time
 - index size where the adapter can measure it
 
@@ -92,8 +95,8 @@ Supported engine keys:
 | `spectrum_fast_cached` | `spectrum_spb_bm25_fast_cached` | byte-prism Spectrum decode with hot payload cache |
 | `spectrum_native_cached` | `spectrum_spb_bm25_native_cached` | optional Rust byte-prism Spectrum decode with hot payload cache |
 | `spectrum_snippet` | `spectrum_snippet_sidecar` | Spectrum search with tracked snippet sidecar hydration |
-| `spectrum_serving` | `spectrum_serving_pipeline` | standard Spectrum serving flow: snippets for top-k plus cached full decode for selected result |
-| `spectrum_serving_native` | `spectrum_serving_pipeline_native` | standard Spectrum serving flow with optional Rust selected-payload decode |
+| `spectrum_serving` | `spectrum_serving_pipeline` | standard Spectrum serving flow: snippets for top-k plus cached selected-result decode, with oversized selected payloads deferred by policy |
+| `spectrum_serving_native` | `spectrum_serving_pipeline_native` | standard Spectrum serving flow that requires the optional Rust selected-payload decoder |
 | `dense_lsa` | `dense_lsa_numpy` | local dense retrieval proxy |
 | `hybrid` | `hybrid_spectrum_dense_rrf` | Spectrum BM25 + dense LSA via reciprocal-rank fusion |
 | `faiss` | `faiss_lsa_flat` | optional FAISS flat inner-product index over local LSA vectors |
@@ -109,13 +112,50 @@ Use these Spectrum engines for different jobs:
 | Engine key | Use this when | Hydration behavior |
 |---|---|---|
 | `spectrum_snippet` | You need ranked previews, result lists, autocomplete, or lightweight RAG candidates. | No full `.spec` decode; returns snippet sidecars. |
-| `spectrum_serving` | You are modelling the production API/UI path. | Returns snippets for top-k and decodes only the selected full payload. |
+| `spectrum_serving` | You are modelling the production API/UI path. | Returns snippets for top-k, decodes only the selected payload, and can defer oversized exact decode. |
 | `spectrum` | You are debugging or benchmarking full Spectrum hydration. | Decodes full payloads for returned results. |
 
 For application developers, `spectrum_serving` is the default integration
 target. `spectrum_snippet` is the fast discovery path inside that flow.
 `spectrum` direct is retained as a diagnostic and benchmark baseline rather
 than the recommended interactive serving mode.
+
+The production benchmark now defaults to `--hydrate-limit 1`, matching the
+serving shape used by an interactive UI or API: result lists hydrate from
+snippet sidecars, and only the selected result attempts full `.spec` decode.
+Spectrum serving also uses a byte-bounded decoded-payload LRU cache and
+`--max-auto-decode-spec-bytes` to avoid letting very large selected files
+dominate P95 latency. The default threshold is 16 KiB under the `auto` decode
+policy. When a selected `.spec` payload exceeds that threshold, the serving row
+returns snippet/metadata immediately and records the selected payload as
+`deferred`; callers that need exact source can request exact decode.
+
+To compare hydration policies in one report:
+
+```bash
+python rag/production_benchmark.py \
+  --benchmark-dir benchmarks/generated/codebase_benchmark_self_files \
+  --out-dir benchmarks/generated/hydration_tail_matrix \
+  --engine spectrum_serving \
+  --hydration-matrix \
+  --matrix-hydrate-limits 0,1,5
+```
+
+Useful controls:
+
+- `--decode-policy none` returns snippet/metadata only and never decodes the
+  selected full payload during the benchmark.
+- `--decode-policy auto` is the default: decode selected payloads under the
+  auto-decode threshold and defer larger selected payloads.
+- `--decode-policy exact` always decodes the selected full payload.
+- `--hydrate-limit 0` measures search plus snippet-sidecar behavior only.
+- `--hydrate-limit 1` models selected-result hydration and is the default.
+- `--hydrate-limit -1` hydrates the returned top-k and is mainly for stress
+  testing.
+- `--max-auto-decode-spec-bytes -1` disables oversized-payload deferral.
+- `--force-selected-decode` is a backwards-compatible alias for
+  `--decode-policy exact`.
+- `--decode-cache-bytes` sets the byte budget for the decoded-payload LRU.
 
 ## Optional Adapter Setup
 
@@ -156,9 +196,9 @@ If the extension is unavailable, native engines report `skipped` rather than
 silently falling back to Python.
 
 The standard `spectrum_serving` runtime uses native selected-payload decode
-when the wheel is installed and falls back to the Python reference decoder when
-it is not. The explicit `*_native` benchmark engines are retained so Python and
-native paths can be compared side by side.
+when the wheel is installed and falls back to the Python fast decoder when it
+is not. The explicit `*_native` benchmark engine is retained for runs that
+should skip unless the native extension is available.
 
 Current Apache Commons Lang signal with `--hydrate-limit 1`:
 

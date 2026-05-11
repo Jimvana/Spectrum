@@ -42,7 +42,8 @@ Spectrum is not attempting to compete with gzip, Brotli, or zstd as a pure byte 
 
 Latest large-corpus benchmark using the `accurate` Spectrum serving profile on
 the same 72,601-document Linux-scale repository corpus. Rebench run:
-2026-05-11, 80 generated file/path queries, top-k 5, hydrate-limit 5.
+2026-05-11, 80 generated file/path queries, top-k 5, hydrate-limit 1,
+`auto` decode policy, 16 KiB auto-decode threshold.
 
 | Metric                                  | Spectrum serving (`accurate`) |
 | --------------------------------------- | ----------------------------: |
@@ -56,12 +57,12 @@ the same 72,601-document Linux-scale repository corpus. Rebench run:
 | Hit@1                                   |                        0.8500 |
 | MRR                                     |                        0.8625 |
 | Recall@5                                |                        0.8750 |
-| Avg query time                          |                       3.75 ms |
-| Avg hydrate time                        |                       4.78 ms |
-| Avg end-to-end                          |                       8.53 ms |
-| P95 end-to-end                          |                      32.41 ms |
-| Avg CPU end-to-end                      |                       8.01 ms |
-| CPU utilization                         |                        93.89% |
+| Avg query time                          |                       3.43 ms |
+| Avg hydrate time                        |                       1.35 ms |
+| Avg end-to-end                          |                       4.78 ms |
+| P95 end-to-end                          |                       6.35 ms |
+| Avg CPU end-to-end                      |                       4.69 ms |
+| CPU utilization                         |                        98.15% |
 | Peak RSS memory                         |                       ~3.1 GB |
 
 Key observations:
@@ -73,7 +74,13 @@ Key observations:
   * compact `.spec` payloads remain lossless,
   * snippets are served without full hydration,
   * and only selected payloads are byte-prism decoded on demand.
-* The current optimization frontier is candidate generation, fallback-query latency, sidecar footprint, and memory efficiency, not reranking throughput.
+* The current serving default hydrates only the selected result with the `auto`
+  decode policy, which defers exact decode for selected `.spec` payloads above
+  16 KiB. In the latest large-corpus run this preserved quality, reduced average
+  hydrated bytes by about 79% versus the earlier hydrate-limit 5 run, and
+  lowered P95 E2E from 32.41 ms to 6.35 ms.
+* The current optimization frontier is selected-payload decode, sidecar
+  footprint, and memory efficiency, not reranking throughput.
 
 ---
 
@@ -170,15 +177,23 @@ The current serving pipeline supports:
 * RAM-backed `.spec` payload serving,
 * query-windowed snippet sidecars,
 * bounded reranking profiles (`fast`, `balanced`, `accurate`),
-* selective full-payload hydration,
-* and optional native Rust byte-prism decoding.
+* selected-result hydration instead of top-k full hydration,
+* optional size-aware full-decode deferral for oversized selected payloads,
+* byte-bounded decoded-payload LRU caching,
+* and native Rust byte-prism decoding when the extension is installed, with a
+  Python fast-decoder fallback.
 
 ## Which Spectrum Mode To Use
 
 For product integrations, use `spectrum_serving` as the default runtime shape.
 It searches the Spectrum postings, returns fast snippet sidecars for the result
 list, and decodes the selected full `.spec` payload only when a caller opens or
-uses that result.
+uses that result. The serving path keeps result-list hydration cheap by default:
+top-k results use snippets, selected-result hydration is the benchmark default,
+decoded payloads are held in a byte-bounded LRU cache, and very large selected
+`.spec` payloads above the 16 KiB auto-decode threshold can be deferred so the
+caller gets snippet/metadata immediately and requests exact full decode
+explicitly when needed.
 
 Use `spectrum_snippet` when the task only needs ranked previews, search result
 lists, autocomplete, or a lightweight RAG candidate set. It avoids full payload
@@ -192,7 +207,7 @@ but it should not be the normal interactive serving path.
 | Mode | Best use | Full `.spec` decode |
 |---|---|---|
 | `spectrum_snippet` | result lists, previews, lightweight retrieval | No |
-| `spectrum_serving` | production API/UI flow with on-demand exact payloads | Selected result only |
+| `spectrum_serving` | production API/UI flow with on-demand exact payloads | Selected result only; oversized payloads can defer exact decode |
 | `spectrum` | benchmark/debug full hydration behavior | Returned results |
 
 Use `spectrum` for the public CLI command. The older `spec` command remains available as a backwards-compatible alias.
@@ -225,6 +240,23 @@ python rag\production_benchmark.py `
   --spectrum-rerank-candidates 35 `
   --hydrate-limit 1
 ```
+
+Hydration-tail runs can compare snippet-only, selected-result, and top-k
+hydration in one report:
+
+```powershell
+python rag\production_benchmark.py `
+  --benchmark-dir benchmarks\generated\conventional_vs_spectrum_all_queries `
+  --engine spectrum_serving `
+  --hydration-matrix `
+  --matrix-hydrate-limits 0,1,5
+```
+
+Use `--force-selected-decode` or `--max-auto-decode-spec-bytes -1` when a
+benchmark needs exact full selected-payload decode even for oversized files.
+Use `--decode-policy none` for snippet/metadata-only serving, `--decode-policy
+auto` for threshold-aware selected decode, and `--decode-policy exact` when the
+caller knows it needs full text immediately and accepts the latency cost.
 
 Recent local code-search signal:
 

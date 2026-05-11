@@ -20,6 +20,7 @@ import math
 import re
 import time
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -55,6 +56,12 @@ DEFAULT_CANDIDATE_RARE_DF_RATIO = 0.05
 DEFAULT_MAX_PRECANDIDATES = 2000
 DEFAULT_MIN_STRONG_MATCHES = 0.35
 DEFAULT_MIN_CANDIDATE_WEIGHT = 0.05
+DEFAULT_DECODE_CACHE_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES = 16 * 1024
+DECODE_POLICY_NONE = "none"
+DECODE_POLICY_AUTO = "auto"
+DECODE_POLICY_EXACT = "exact"
+DECODE_POLICIES = {DECODE_POLICY_NONE, DECODE_POLICY_AUTO, DECODE_POLICY_EXACT}
 _CODEY_TERM_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9_]+$|[_./\\-]")
 _ALIAS_GROUPS = (
     ("expire", "expires", "expired", "expiry", "links expire", "timed", "timestamp", "max_age", "age"),
@@ -396,6 +403,11 @@ class SpectrumDecodedPayload:
     text: str
     cache_hit: bool
     decode_ms: float
+    deferred: bool = False
+    defer_reason: str = ""
+    spec_bytes: int = 0
+    payload_bytes: int = 0
+    decode_policy: str = DECODE_POLICY_AUTO
 
 
 @dataclass(frozen=True)
@@ -425,6 +437,8 @@ class SpectrumServingRetriever:
         rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
         candidate_policy: CandidatePolicy | None = CandidatePolicy(),
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
+        decode_cache_bytes: int = DEFAULT_DECODE_CACHE_BYTES,
+        max_auto_decode_spec_bytes: int | None = DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES,
     ):
         self.spectrum_store_dir = Path(spectrum_store_dir)
         self.spectrum_pack_path: Path | None = (
@@ -468,6 +482,8 @@ class SpectrumServingRetriever:
         self.title_boost = title_boost
         self.candidate_policy = candidate_policy
         self.full_decoder = full_decoder
+        self.decode_cache_bytes = max(0, decode_cache_bytes)
+        self.max_auto_decode_spec_bytes = max_auto_decode_spec_bytes
         self.title_index = title_token_index(self.documents) if title_boost else None
         self.path_term_index = path_term_index(self.documents)
         self.reranker = (
@@ -490,7 +506,8 @@ class SpectrumServingRetriever:
                 k1=k1,
                 b=b,
             )
-        self.decoded_cache: dict[int, str] = {}
+        self.decoded_cache: OrderedDict[int, tuple[str, int]] = OrderedDict()
+        self.decoded_cache_bytes = 0
         self.last_search_trace: dict | None = None
 
     @classmethod
@@ -507,6 +524,8 @@ class SpectrumServingRetriever:
         rerank_profile: CodeRerankProfile | None = CodeRerankProfile(),
         candidate_policy: CandidatePolicy | None = CandidatePolicy(),
         full_decoder: Callable[[bytes], str] = decode_code_spec_bytes_native_or_fast,
+        decode_cache_bytes: int = DEFAULT_DECODE_CACHE_BYTES,
+        max_auto_decode_spec_bytes: int | None = DEFAULT_MAX_AUTO_DECODE_SPEC_BYTES,
     ) -> "SpectrumServingRetriever":
         benchmark_dir = Path(benchmark_dir)
         snippets_by_id = cls.load_or_build_snippets(
@@ -529,6 +548,8 @@ class SpectrumServingRetriever:
             rerank_profile=rerank_profile,
             candidate_policy=candidate_policy,
             full_decoder=full_decoder,
+            decode_cache_bytes=decode_cache_bytes,
+            max_auto_decode_spec_bytes=max_auto_decode_spec_bytes,
         )
 
     @staticmethod
@@ -813,22 +834,102 @@ class SpectrumServingRetriever:
             )
         return results
 
-    def decode(self, doc_id: int) -> SpectrumDecodedPayload:
+    def _spec_size(self, doc_id: int) -> int:
+        data = self.spec_bytes.get(doc_id)
+        if data is not None:
+            return len(data)
+        if self.spectrum_pack_path is not None:
+            with zipfile.ZipFile(self.spectrum_pack_path) as pack:
+                return pack.getinfo(self.spec_members[doc_id]).file_size
+        return self.spec_paths[doc_id].stat().st_size
+
+    def _spec_data(self, doc_id: int) -> bytes:
+        data = self.spec_bytes.get(doc_id)
+        if data is not None:
+            return data
+        if self.spectrum_pack_path is not None:
+            with zipfile.ZipFile(self.spectrum_pack_path) as pack:
+                return pack.read(self.spec_members[doc_id])
+        return self.spec_paths[doc_id].read_bytes()
+
+    def _cache_get(self, doc_id: int) -> str | None:
+        cached = self.decoded_cache.get(doc_id)
+        if cached is None:
+            return None
+        text, size = cached
+        self.decoded_cache.move_to_end(doc_id)
+        return text
+
+    def _cache_put(self, doc_id: int, text: str) -> None:
+        size = len(text.encode("utf-8"))
+        if self.decode_cache_bytes <= 0 or size > self.decode_cache_bytes:
+            return
+        existing = self.decoded_cache.pop(doc_id, None)
+        if existing is not None:
+            self.decoded_cache_bytes -= existing[1]
+        self.decoded_cache[doc_id] = (text, size)
+        self.decoded_cache_bytes += size
+        while self.decoded_cache_bytes > self.decode_cache_bytes and self.decoded_cache:
+            _old_id, (_old_text, old_size) = self.decoded_cache.popitem(last=False)
+            self.decoded_cache_bytes -= old_size
+
+    def decode(
+        self,
+        doc_id: int,
+        *,
+        force: bool = False,
+        fallback_text: str = "",
+        decode_policy: str = DECODE_POLICY_AUTO,
+    ) -> SpectrumDecodedPayload:
+        if force:
+            decode_policy = DECODE_POLICY_EXACT
+        if decode_policy not in DECODE_POLICIES:
+            raise ValueError(f"Unknown decode policy: {decode_policy}")
         doc = self.docs_by_id[doc_id]
         started = time.perf_counter()
-        cached = doc_id in self.decoded_cache
-        if cached:
-            text = self.decoded_cache[doc_id]
+        spec_size = self._spec_size(doc_id)
+        if decode_policy == DECODE_POLICY_NONE:
+            text = fallback_text
+            return SpectrumDecodedPayload(
+                id=doc_id,
+                title=str(doc.get("title", "")),
+                source_path=str(doc.get("source_path", doc.get("title", ""))),
+                text=text,
+                cache_hit=False,
+                decode_ms=(time.perf_counter() - started) * 1000,
+                deferred=True,
+                defer_reason="decode_policy_none",
+                spec_bytes=spec_size,
+                payload_bytes=len(text.encode("utf-8")),
+                decode_policy=decode_policy,
+            )
+        cached_text = self._cache_get(doc_id)
+        cached = cached_text is not None
+        if cached_text is not None:
+            text = cached_text
         else:
-            data = self.spec_bytes.get(doc_id)
-            if data is None:
-                if self.spectrum_pack_path is not None:
-                    with zipfile.ZipFile(self.spectrum_pack_path) as pack:
-                        data = pack.read(self.spec_members[doc_id])
-                else:
-                    data = self.spec_paths[doc_id].read_bytes()
+            if (
+                decode_policy == DECODE_POLICY_AUTO
+                and self.max_auto_decode_spec_bytes is not None
+                and spec_size > self.max_auto_decode_spec_bytes
+            ):
+                text = fallback_text
+                return SpectrumDecodedPayload(
+                    id=doc_id,
+                    title=str(doc.get("title", "")),
+                    source_path=str(doc.get("source_path", doc.get("title", ""))),
+                    text=text,
+                    cache_hit=False,
+                    decode_ms=(time.perf_counter() - started) * 1000,
+                    deferred=True,
+                    defer_reason="spec_payload_over_auto_decode_limit",
+                    spec_bytes=spec_size,
+                    payload_bytes=len(text.encode("utf-8")),
+                    decode_policy=decode_policy,
+                )
+            data = self._spec_data(doc_id)
             text = self.full_decoder(data)
-            self.decoded_cache[doc_id] = text
+            self._cache_put(doc_id, text)
         return SpectrumDecodedPayload(
             id=doc_id,
             title=str(doc.get("title", "")),
@@ -836,7 +937,11 @@ class SpectrumServingRetriever:
             text=text,
             cache_hit=cached,
             decode_ms=(time.perf_counter() - started) * 1000,
+            spec_bytes=spec_size,
+            payload_bytes=len(text.encode("utf-8")),
+            decode_policy=decode_policy,
         )
 
     def clear_cache(self) -> None:
         self.decoded_cache.clear()
+        self.decoded_cache_bytes = 0

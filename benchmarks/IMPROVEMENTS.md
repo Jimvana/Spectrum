@@ -11,6 +11,24 @@ place to tick off benchmark and retrieval quality follow-ups.
 - Corpus: 30 files, 31 chunks, 77,545 raw chunk bytes
 - Spectrum fidelity: true, 0 failures
 
+## Latest Large-Corpus Reference
+
+- Corpus: `C:\Users\james\Desktop\2rep`
+- Docs: 72,601
+- Raw bytes: 1,028,410,590
+- Current serving-policy output:
+  `benchmarks/generated/readme_rebench_20260511_current_policy_128k/`
+- Profile: `spectrum_serving`, `accurate`, top-k 5, hydrate-limit 1,
+  `auto` decode policy, 16 KiB auto-decode threshold
+- Result: Hit@1 0.8500, MRR 0.8625, Recall@5 0.8750, avg query 3.43 ms,
+  avg hydrate 1.35 ms, avg E2E 4.78 ms, P95 E2E 6.35 ms
+- Previous hydrate-limit 5 reference:
+  `benchmarks/generated/readme_rebench_20260511_fallback_fix/`, avg query
+  3.75 ms, avg E2E 8.53 ms, P95 E2E 32.41 ms
+- Note: zero-candidate fallback search is no longer the main latency issue.
+  The 16 KiB policy deferred five selected `.spec` payloads in this query set;
+  callers can use `--decode-policy exact` when they know full text is required.
+
 ## Checklist
 
 - [x] Debug why `spectrum_spb_bm25` and `spectrum_serving_pipeline` quality
@@ -67,6 +85,49 @@ place to tick off benchmark and retrieval quality follow-ups.
       - Add at least two more small external repos before treating the signal as
         stable.
 
+- [x] Fix large-corpus zero-candidate fallback latency.
+      - Bounded path/title fallback now handles the previous slow fallback
+        cases before the broad full-content BM25 path.
+      - Large-corpus reference improved from avg query 14.79 ms / avg E2E
+        18.60 ms / P95 E2E 92.08 ms to avg query 3.75 ms / avg E2E 8.53 ms /
+        P95 E2E 32.41 ms.
+
+- [ ] Reduce large-corpus hydration/decode tail latency.
+      - The remaining P95 E2E cost is now selected-payload hydration/decode,
+        especially for large files.
+      - Benchmark hydrate-limit 0, hydrate-limit 1, top-k hydration, cached
+        decode, native decode, RAM-backed payloads, and sidecar-only result
+        list paths on the same 72,601-document corpus.
+      - Keep search, hydrate, and E2E metrics separate so decode work does not
+        obscure retrieval regressions.
+      - Current serving mitigation is implemented: selected-result hydration is
+        the default, native-or-fast selected decode is used, decoded payloads use
+        a byte-bounded LRU cache, and oversized selected `.spec` payloads are
+        deferred to snippet/metadata unless exact decode is forced.
+
+- [x] Add hydration tail profiler output.
+      - `rag/production_benchmark.py` now supports `--hydration-matrix` with
+        comma-separated hydrate limits, records per-query hydrated bytes,
+        selected payload path, cache hit, and decode milliseconds, and surfaces
+        the slowest hydration outliers in Markdown.
+      - Smoke verified on `benchmarks/generated/ram_hydrate_smoke` with
+        `spectrum_serving` and `spectrum_fast` across hydrate limits 0, 1, and
+        5.
+
+- [x] Add size-aware selected decode policy.
+      - `SpectrumServingRetriever` now uses a byte-bounded decoded-payload LRU
+        cache and can defer exact selected decode for `.spec` payloads above
+        `--max-auto-decode-spec-bytes`. The default threshold is 16 KiB.
+      - The benchmark default is now `--hydrate-limit 1`, matching the
+        production result-list path where top-k rows are snippets and only the
+        selected item attempts exact payload decode.
+      - The selected-result decode policy can be `none`, `auto`, or `exact`.
+      - Smoke verified with `--max-auto-decode-spec-bytes 100`, which deferred
+        selected decode and dropped hydration time to snippet-sidecar levels.
+      - Large-corpus run with the default 16 KiB threshold preserved quality,
+        reduced avg hydrated bytes from 17,447 to 3,719, and moved P95 E2E from
+        32.41 ms to 6.35 ms versus the earlier hydrate-limit 5 reference.
+
 ## Useful Next Work
 
 1. Stabilize the signal across more repos.
@@ -75,11 +136,14 @@ place to tick off benchmark and retrieval quality follow-ups.
    - Good targets are one Python library with tests/config and one non-Python
      repo with `src/`, tests, docs, and CI metadata.
 
-2. Reduce Spectrum serving E2E latency.
+2. Reduce Spectrum serving hydration/decode P95.
+   - Large-corpus fallback search is fixed; current P95 E2E reference is
+     32.41 ms.
    - Current labelled smoke quality is good, but serving E2E is still dominated
      by selected payload hydration/decode.
    - Compare `hydrate_limit=0`, `hydrate_limit=1`, cached decode, native decode,
-     and smaller sidecar sizes with the same labelled query set.
+     RAM-backed payloads, and smaller sidecar sizes with the same labelled query
+     set.
 
 3. Make alias and intent rules data-driven.
    - Move the hard-coded synonym groups and path-intent rules into a small
