@@ -102,6 +102,21 @@ Supported engine keys:
 | `zoekt` | `zoekt_cli` | optional Zoekt CLI adapter |
 | `lucene` | `lucene_pyserini_bm25` | placeholder for Pyserini/Lucene wiring |
 
+### Spectrum Mode Guidance
+
+Use these Spectrum engines for different jobs:
+
+| Engine key | Use this when | Hydration behavior |
+|---|---|---|
+| `spectrum_snippet` | You need ranked previews, result lists, autocomplete, or lightweight RAG candidates. | No full `.spec` decode; returns snippet sidecars. |
+| `spectrum_serving` | You are modelling the production API/UI path. | Returns snippets for top-k and decodes only the selected full payload. |
+| `spectrum` | You are debugging or benchmarking full Spectrum hydration. | Decodes full payloads for returned results. |
+
+For application developers, `spectrum_serving` is the default integration
+target. `spectrum_snippet` is the fast discovery path inside that flow.
+`spectrum` direct is retained as a diagnostic and benchmark baseline rather
+than the recommended interactive serving mode.
+
 ## Optional Adapter Setup
 
 FAISS:

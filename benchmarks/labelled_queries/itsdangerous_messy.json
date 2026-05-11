@@ -1,0 +1,49 @@
+[
+  {
+    "id": "itsdangerous-messy-001",
+    "query_type": "messy_human",
+    "query": "where does it sign stuff and then check if someone messed with it",
+    "expected_paths": [
+      "src/itsdangerous/signer.py",
+      "src/itsdangerous/serializer.py",
+      "src/itsdangerous/exc.py"
+    ]
+  },
+  {
+    "id": "itsdangerous-messy-002",
+    "query_type": "messy_human",
+    "query": "that bit for links that expire after a while",
+    "expected_paths": [
+      "src/itsdangerous/timed.py",
+      "src/itsdangerous/url_safe.py"
+    ]
+  },
+  {
+    "id": "itsdangerous-messy-003",
+    "query_type": "messy_human",
+    "query": "how do they make json safe for putting in urls",
+    "expected_paths": [
+      "src/itsdangerous/url_safe.py",
+      "src/itsdangerous/_json.py",
+      "src/itsdangerous/encoding.py"
+    ]
+  },
+  {
+    "id": "itsdangerous-messy-004",
+    "query_type": "messy_human",
+    "query": "tests for broken or tampered tokens",
+    "expected_paths": [
+      "tests/test_itsdangerous/test_signer.py",
+      "tests/test_itsdangerous/test_serializer.py",
+      "tests/test_itsdangerous/test_timed.py"
+    ]
+  },
+  {
+    "id": "itsdangerous-messy-005",
+    "query_type": "messy_human",
+    "query": "where's the cli or setup entry point if there is one",
+    "expected_paths": [
+      "pyproject.toml"
+    ]
+  }
+]

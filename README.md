@@ -169,6 +169,28 @@ The current serving pipeline supports:
 * selective full-payload hydration,
 * and optional native Rust byte-prism decoding.
 
+## Which Spectrum Mode To Use
+
+For product integrations, use `spectrum_serving` as the default runtime shape.
+It searches the Spectrum postings, returns fast snippet sidecars for the result
+list, and decodes the selected full `.spec` payload only when a caller opens or
+uses that result.
+
+Use `spectrum_snippet` when the task only needs ranked previews, search result
+lists, autocomplete, or a lightweight RAG candidate set. It avoids full payload
+decode and is usually the fastest path.
+
+Use `spectrum` / Spectrum direct mainly for diagnostics and benchmarks. It
+searches the Spectrum index and decodes full payloads for returned results, so
+it is useful for measuring exact hydration cost and validating `.spec` fidelity,
+but it should not be the normal interactive serving path.
+
+| Mode | Best use | Full `.spec` decode |
+|---|---|---|
+| `spectrum_snippet` | result lists, previews, lightweight retrieval | No |
+| `spectrum_serving` | production API/UI flow with on-demand exact payloads | Selected result only |
+| `spectrum` | benchmark/debug full hydration behavior | Returned results |
+
 Use `spectrum` for the public CLI command. The older `spec` command remains available as a backwards-compatible alias.
 
 ---

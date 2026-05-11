@@ -55,11 +55,90 @@ DEFAULT_MAX_PRECANDIDATES = 2000
 DEFAULT_MIN_STRONG_MATCHES = 0.35
 DEFAULT_MIN_CANDIDATE_WEIGHT = 0.05
 _CODEY_TERM_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9_]+$|[_./\\-]")
+_ALIAS_GROUPS = (
+    ("expire", "expires", "expired", "expiry", "links expire", "timed", "timestamp", "max_age", "age"),
+    ("tampered", "messed with", "broken token", "bad signature", "bad data", "unsign", "signature"),
+    ("setup entry point", "entry point", "cli", "command", "pyproject", "project.scripts", "entry_points", "console_scripts"),
+    ("url", "urls", "link", "links", "safe", "base64", "url_safe", "urlsafe"),
+)
+_ALIAS_KEY_RE = re.compile(r"[A-Za-z0-9]+")
+
+
+def _alias_key(value: str) -> tuple[str, ...]:
+    return tuple(match.group(0).lower() for match in _ALIAS_KEY_RE.finditer(value))
+
+
+_ALIAS_LOOKUP = {
+    _alias_key(alias): tuple(group)
+    for group in _ALIAS_GROUPS
+    for alias in group
+}
+_TEST_INTENT_TERMS = {"test", "tests", "broken", "fails", "failure", "regression", "tampered"}
+_IMPLEMENTATION_INTENT_TERMS = {
+    "code",
+    "function",
+    "class",
+    "implementation",
+    "where",
+    "sign",
+    "verify",
+    "url",
+    "json",
+}
+_PACKAGING_INTENT_TERMS = {"setup", "entry", "point", "cli", "command", "pyproject", "script", "scripts"}
+_GITHUB_INTENT_TERMS = {"github", "issue", "pull", "workflow", "ci", "template", "action", "actions"}
+_RERANK_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "how",
+    "if",
+    "in",
+    "is",
+    "it",
+    "of",
+    "one",
+    "or",
+    "the",
+    "then",
+    "there",
+    "they",
+    "where",
+    "with",
+}
 
 
 def _snippet_terms(query: str) -> list[str]:
     terms = [term.lower() for term in _SNIPPET_TERM_RE.findall(query)]
     return list(dict.fromkeys(term for term in terms if len(term) >= 2))
+
+
+def expand_query_aliases(query: str) -> tuple[str, list[str]]:
+    query_key = _alias_key(query)
+    present_keys = {
+        query_key[start:end]
+        for start in range(len(query_key))
+        for end in range(start + 1, len(query_key) + 1)
+    }
+    aliases: list[str] = []
+    for trigger_key, group in _ALIAS_LOOKUP.items():
+        if trigger_key and trigger_key in present_keys:
+            aliases.extend(group)
+    aliases = [
+        alias
+        for alias in dict.fromkeys(aliases)
+        if _alias_key(alias) not in present_keys
+    ]
+    if not aliases:
+        return query, []
+    return f"{query} {' '.join(aliases)}", aliases
+
+
+def _rerank_query_terms(query: str) -> set[str]:
+    expanded_query, _aliases = expand_query_aliases(query)
+    terms = _split_code_words(expanded_query) or _snippet_terms(expanded_query)
+    return {term for term in terms if term not in _RERANK_STOPWORDS}
 
 
 def _split_code_words(value: str) -> list[str]:
@@ -114,6 +193,8 @@ class CodeRerankProfile:
     path_boost: float = DEFAULT_PATH_BOOST
     structure_boost: float = DEFAULT_STRUCTURE_BOOST
     proximity_boost: float = DEFAULT_PROXIMITY_BOOST
+    intent_path_boost: float = 4.0
+    metadata_penalty: float = 2.0
 
 
 def code_rerank_profile(name: str, candidates: int | None = None) -> CodeRerankProfile | None:
@@ -141,6 +222,8 @@ def code_rerank_profile(name: str, candidates: int | None = None) -> CodeRerankP
         path_boost=profile.path_boost,
         structure_boost=profile.structure_boost,
         proximity_boost=profile.proximity_boost,
+        intent_path_boost=profile.intent_path_boost,
+        metadata_penalty=profile.metadata_penalty,
     )
 
 
@@ -161,17 +244,32 @@ class CodeSignalReranker:
             self.positions_by_id[doc_id] = _term_positions(text)
 
     def score(self, doc_id: int, query_terms: set[str]) -> float:
+        return sum(self.score_breakdown(doc_id, query_terms).values())
+
+    def score_breakdown(self, doc_id: int, query_terms: set[str]) -> dict[str, float]:
         fields = self.fields_by_id.get(doc_id)
         if not fields or not query_terms:
-            return 0.0
+            return {}
 
-        score = 0.0
-        score += self.profile.path_boost * len(query_terms & fields["path"])
-        score += self.profile.path_boost * 0.5 * len(query_terms & fields["filename"])
-        score += self.profile.identifier_boost * len(query_terms & fields["identifier"])
-        score += self.profile.structure_boost * len(query_terms & fields["structure"])
-        score += self.proximity_score(doc_id, query_terms)
-        return score
+        path_terms = fields["path"]
+        contributions = {
+            "path": self.profile.path_boost * len(query_terms & path_terms),
+            "filename": self.profile.path_boost * 0.5 * len(query_terms & fields["filename"]),
+            "identifier": self.profile.identifier_boost * len(query_terms & fields["identifier"]),
+            "structure": self.profile.structure_boost * len(query_terms & fields["structure"]),
+            "proximity": self.proximity_score(doc_id, query_terms),
+        }
+        if query_terms & _TEST_INTENT_TERMS and "tests" in path_terms:
+            contributions["test_path_intent"] = self.profile.intent_path_boost
+        if query_terms & _IMPLEMENTATION_INTENT_TERMS and "src" in path_terms:
+            contributions["src_path_intent"] = self.profile.intent_path_boost
+        if query_terms & _PACKAGING_INTENT_TERMS and (
+            "pyproject" in path_terms or "setup" in path_terms or "scripts" in path_terms
+        ):
+            contributions["packaging_path_intent"] = self.profile.intent_path_boost
+        if "github" in path_terms and not (query_terms & _GITHUB_INTENT_TERMS):
+            contributions["metadata_penalty"] = -self.profile.metadata_penalty
+        return contributions
 
     def proximity_score(self, doc_id: int, query_terms: set[str]) -> float:
         positions = self.positions_by_id.get(doc_id, {})
@@ -200,7 +298,7 @@ class CodeSignalReranker:
         base_weight: float = 0.01,
         top_k: int = 5,
     ) -> list[int]:
-        query_terms = set(_split_code_words(query) or _snippet_terms(query))
+        query_terms = _rerank_query_terms(query)
         if not query_terms:
             return ranked_doc_ids[:top_k]
         scored = []
@@ -209,6 +307,24 @@ class CodeSignalReranker:
             scored.append((doc_id, score))
         scored.sort(key=lambda item: item[1], reverse=True)
         return [doc_id for doc_id, score in scored[:top_k]]
+
+    def explain(self, doc_id: int, query: str) -> dict:
+        expanded_query, aliases = expand_query_aliases(query)
+        query_terms = _rerank_query_terms(expanded_query)
+        fields = self.fields_by_id.get(doc_id, {})
+        matched = {name: sorted(query_terms & values) for name, values in fields.items()}
+        contributions = self.score_breakdown(doc_id, query_terms)
+        return {
+            "query_terms": sorted(query_terms),
+            "matched_aliases": aliases,
+            "matched_fields": matched,
+            "rerank_contributions": {
+                key: round(value, 4)
+                for key, value in contributions.items()
+                if value
+            },
+            "rerank_score": round(sum(contributions.values()), 4),
+        }
 
 
 def windowed_snippet(text: str, query: str, limit: int) -> str:
@@ -278,6 +394,7 @@ class CandidatePolicy:
     min_strong_matches: float = DEFAULT_MIN_STRONG_MATCHES
     graded_weighting: bool = True
     min_candidate_weight: float = DEFAULT_MIN_CANDIDATE_WEIGHT
+    fallback_to_full_search: bool = True
 
 
 class SpectrumServingRetriever:
@@ -286,7 +403,7 @@ class SpectrumServingRetriever:
         spectrum_store_dir: Path,
         snippets_by_id: dict[int, str],
         preload_specs: bool = True,
-        snippet_chars: int = 600,
+        snippet_chars: int = 2000,
         k1: float = DEFAULT_SERVING_K1,
         b: float = DEFAULT_SERVING_B,
         max_df_ratio: float | None = DEFAULT_SERVING_MAX_DF_RATIO,
@@ -365,7 +482,7 @@ class SpectrumServingRetriever:
     def from_codebase_benchmark(
         cls,
         benchmark_dir: Path,
-        snippet_chars: int = 600,
+        snippet_chars: int = 2000,
         sidecar_path: Path | None = None,
         preload_specs: bool = True,
         k1: float = DEFAULT_SERVING_K1,
@@ -402,7 +519,7 @@ class SpectrumServingRetriever:
     @staticmethod
     def load_or_build_snippets(
         benchmark_dir: Path,
-        snippet_chars: int = 600,
+        snippet_chars: int = 2000,
         sidecar_path: Path | None = None,
     ) -> dict[int, str]:
         benchmark_dir = Path(benchmark_dir)
@@ -470,14 +587,16 @@ class SpectrumServingRetriever:
         include_raw_postings: bool = False,
     ) -> tuple[list[int], dict]:
         candidate_count = max(top_k, self.reranker.profile.candidates if self.reranker else top_k)
-        query_ids = retrieval_token_ids(query)
-        token_stats = self.query_token_stats(query)
+        expanded_query, aliases = expand_query_aliases(query)
+        query_ids = retrieval_token_ids(expanded_query)
+        token_stats = self.query_token_stats(expanded_query)
         raw_postings_matches = (
             len(self.bm25.candidate_ids(query_ids))
             if include_raw_postings
             else None
         )
         retrieval_started = time.perf_counter()
+        used_fallback = False
         if self.candidate_policy and self.candidate_policy.enabled:
             doc_ids, trace = self.bm25.selective_search(
                 query_ids,
@@ -489,10 +608,24 @@ class SpectrumServingRetriever:
                 min_strong_matches=self.candidate_policy.min_strong_matches,
                 title_index=self.title_index,
                 title_boost=self.title_boost,
-                strong_token_ids=self._strong_query_token_ids(query),
+                strong_token_ids=self._strong_query_token_ids(expanded_query),
                 graded_weighting=self.candidate_policy.graded_weighting,
                 min_candidate_weight=self.candidate_policy.min_candidate_weight,
             )
+            if (
+                self.candidate_policy.fallback_to_full_search
+                and len(doc_ids) < top_k
+            ):
+                fallback_ids = self.bm25.search(
+                    query_ids,
+                    candidate_count,
+                    max_df_ratio=self.max_df_ratio,
+                    title_index=self.title_index,
+                    title_boost=self.title_boost,
+                )
+                merged_doc_ids = list(dict.fromkeys([*doc_ids, *fallback_ids]))
+                doc_ids = merged_doc_ids[:candidate_count]
+                used_fallback = True
         else:
             doc_ids = self.bm25.search(
                 query_ids,
@@ -510,18 +643,21 @@ class SpectrumServingRetriever:
         retrieval_ms = (time.perf_counter() - retrieval_started) * 1000
         rerank_started = time.perf_counter()
         if self.reranker:
-            doc_ids = self.reranker.rerank(doc_ids, query, top_k=top_k)
+            doc_ids = self.reranker.rerank(doc_ids, expanded_query, top_k=top_k)
         else:
             doc_ids = doc_ids[:top_k]
         rerank_ms = (time.perf_counter() - rerank_started) * 1000
         trace.update({
             "raw_postings_matches": raw_postings_matches,
             "initial_postings_matches": trace.get("candidate_pool", raw_postings_matches),
-            "reranker_in": trace.get("reranker_in", 0),
+            "reranker_in": len(doc_ids),
+            "used_fallback_search": used_fallback,
             "hydrated": 0,
             "retrieval_ms": retrieval_ms,
             "rerank_ms": rerank_ms,
             "token_stats": token_stats,
+            "expanded_query": expanded_query,
+            "matched_aliases": aliases,
         })
         self.last_search_trace = trace
         return doc_ids, trace

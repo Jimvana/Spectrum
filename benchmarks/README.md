@@ -11,6 +11,8 @@ This directory is the standard home for Spectrum benchmark outputs and reports.
   review and comparison.
 - `PRODUCTION_ENGINE_BENCHMARKS.md` documents the production-engine benchmark
   workflow.
+- `IMPROVEMENTS.md` tracks benchmark and retrieval quality follow-ups found
+  during local runs.
 
 ## Current Tracked Reports
 

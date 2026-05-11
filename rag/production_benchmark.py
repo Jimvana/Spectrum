@@ -36,6 +36,7 @@ from rag.spectrum_serving import (
     DEFAULT_SERVING_TITLE_BOOST,
     SpectrumServingRetriever,
     code_rerank_profile,
+    expand_query_aliases,
     title_token_index,
     windowed_snippet,
 )
@@ -139,6 +140,47 @@ def load_queries(benchmark_dir: Path, query_path: Path | None) -> list[dict]:
     return data
 
 
+def query_type(item: dict) -> str:
+    if item.get("query_type"):
+        return str(item["query_type"])
+    if item.get("expected_paths") or item.get("expected_ids") or item.get("document_ids"):
+        return "labelled"
+    return "generated"
+
+
+def resolve_labelled_queries(queries: list[dict], docs: list[CorpusDoc]) -> list[dict]:
+    path_to_ids: dict[str, list[int]] = {}
+    title_to_ids: dict[str, list[int]] = {}
+    for doc in docs:
+        path_to_ids.setdefault(doc.path, []).append(doc.id)
+        title_to_ids.setdefault(doc.title, []).append(doc.id)
+
+    resolved = []
+    missing = []
+    for item in queries:
+        row = dict(item)
+        relevant_ids = set(int(doc_id) for doc_id in row.get("relevant_ids", []))
+        for key in ("expected_ids", "document_ids"):
+            relevant_ids.update(int(doc_id) for doc_id in row.get(key, []))
+        for path in row.get("expected_paths", []):
+            ids = path_to_ids.get(str(path)) or title_to_ids.get(str(path)) or []
+            if not ids:
+                missing.append(str(path))
+            relevant_ids.update(ids)
+        if not relevant_ids and row.get("title"):
+            ids = title_to_ids.get(str(row["title"]), [])
+            if not ids:
+                missing.append(str(row["title"]))
+            relevant_ids.update(ids)
+        row["relevant_ids"] = sorted(relevant_ids)
+        row["query_type"] = query_type(row)
+        resolved.append(row)
+    if missing:
+        preview = ", ".join(sorted(set(missing))[:10])
+        raise ValueError(f"Labelled query paths/titles not found in benchmark docs: {preview}")
+    return resolved
+
+
 def evaluate_engine(
     engine: SearchEngine,
     docs: list[CorpusDoc],
@@ -164,8 +206,19 @@ def evaluate_engine(
     cpu_search_latencies = []
     cpu_hydrate_latencies = []
     hydrated_bytes = []
+    per_query = []
+    grouped: dict[str, dict] = {}
+
+    def group_state(name: str) -> dict:
+        if name not in grouped:
+            grouped[name] = {"count": 0, "hit1": 0, "recall": 0, "rr": []}
+        return grouped[name]
+
     for item in queries:
         relevant = set(int(doc_id) for doc_id in item.get("relevant_ids", []))
+        qtype = query_type(item)
+        group = group_state(qtype)
+        group["count"] += 1
         started = time.perf_counter()
         cpu_started = time.process_time()
         result_ids = engine.search(str(item["query"]), top_k)
@@ -184,10 +237,23 @@ def evaluate_engine(
         hydrated_bytes.append(sum(len(payload.encode("utf-8")) for payload in payloads))
         if result_ids and result_ids[0] in relevant:
             hit1 += 1
+            group["hit1"] += 1
         if relevant.intersection(result_ids):
             recall += 1
+            group["recall"] += 1
         rank = next((i + 1 for i, doc_id in enumerate(result_ids) if doc_id in relevant), None)
         rr.append(1 / rank if rank else 0.0)
+        group["rr"].append(1 / rank if rank else 0.0)
+        per_query.append({
+            "query": item["query"],
+            "query_type": qtype,
+            "relevant_ids": sorted(relevant),
+            "result_ids": result_ids,
+            "rank": rank,
+            "search_ms": round((search_done - started) * 1000, 4),
+            "hydrate_ms": round((hydrate_done - search_done) * 1000, 4),
+            "diagnostics": engine.explain(str(item["query"]), result_ids) if hasattr(engine, "explain") else {},
+        })
 
     total = max(1, len(queries))
     report.metrics = {
@@ -211,6 +277,16 @@ def evaluate_engine(
         ),
         "avg_hydrated_bytes": round(mean(hydrated_bytes) if hydrated_bytes else 0.0, 2),
         "hydrate_limit": hydrate_limit if hydrate_limit is not None else top_k,
+        "by_query_type": {
+            name: {
+                "queries": values["count"],
+                "hit_at_1": round(values["hit1"] / max(1, values["count"]), 4),
+                f"recall_at_{top_k}": round(values["recall"] / max(1, values["count"]), 4),
+                "mrr": round(mean(values["rr"]) if values["rr"] else 0.0, 4),
+            }
+            for name, values in grouped.items()
+        },
+        "per_query": per_query,
     }
     return report
 
@@ -312,6 +388,7 @@ class SpectrumBM25Engine:
         }
         self.hydration_cache: dict[int, str] = {}
         self.title_index = title_token_index(docs_meta["documents"]) if self.title_boost else None
+        self.docs_meta_by_id = {int(doc["id"]): doc for doc in docs_meta["documents"]}
         text_by_id = {doc.id: doc.text for doc in docs}
         self.reranker = (
             CodeSignalReranker(docs_meta["documents"], text_by_id, self.rerank_profile)
@@ -342,17 +419,38 @@ class SpectrumBM25Engine:
         from rag.normalization import retrieval_token_ids
 
         self.last_query = query
+        expanded_query, aliases = expand_query_aliases(query)
+        self.last_expanded_query = expanded_query
+        self.last_aliases = aliases
         candidate_count = max(top_k, self.reranker.profile.candidates if self.reranker else top_k)
         doc_ids = self.bm25.search(
-            retrieval_token_ids(query),
+            retrieval_token_ids(expanded_query),
             candidate_count,
             max_df_ratio=self.max_df_ratio,
             title_index=self.title_index,
             title_boost=self.title_boost,
         )
         if self.reranker:
-            return self.reranker.rerank(doc_ids, query, top_k=top_k)
+            return self.reranker.rerank(doc_ids, expanded_query, top_k=top_k)
         return doc_ids[:top_k]
+
+    def explain(self, query: str, result_ids: list[int]) -> dict:
+        rows = []
+        for doc_id in result_ids:
+            doc = self.docs_meta_by_id.get(doc_id, {})
+            row = {
+                "id": doc_id,
+                "title": doc.get("title", ""),
+                "source_path": doc.get("source_path", doc.get("title", "")),
+            }
+            if self.reranker:
+                row.update(self.reranker.explain(doc_id, query))
+            rows.append(row)
+        return {
+            "expanded_query": getattr(self, "last_expanded_query", query),
+            "matched_aliases": getattr(self, "last_aliases", []),
+            "top_results": rows,
+        }
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         payloads = []
@@ -461,6 +559,24 @@ class SpectrumServingPipelineEngine:
     def search(self, query: str, top_k: int) -> list[int]:
         self.last_results = self.retriever.search(query, top_k=top_k)
         return [result.id for result in self.last_results]
+
+    def explain(self, query: str, result_ids: list[int]) -> dict:
+        result_by_id = {result.id: result for result in getattr(self, "last_results", [])}
+        rows = []
+        for doc_id in result_ids:
+            result = result_by_id.get(doc_id)
+            row = {
+                "id": doc_id,
+                "title": result.title if result else "",
+                "source_path": result.source_path if result else "",
+            }
+            if self.retriever.reranker:
+                row.update(self.retriever.reranker.explain(doc_id, query))
+            rows.append(row)
+        return {
+            "trace": self.retriever.last_search_trace or {},
+            "top_results": rows,
+        }
 
     def hydrate(self, doc_ids: list[int]) -> list[str]:
         if not doc_ids:
@@ -873,6 +989,30 @@ def write_markdown(out_dir: Path, report: dict) -> None:
             f"{row.get('build_cpu_seconds', '')} | "
             f"{row.get('index_bytes') or ''} | {row.get('error', '')} |"
         )
+    query_types = sorted({
+        name
+        for row in report["engines"]
+        for name in (row.get("metrics") or {}).get("by_query_type", {})
+    })
+    if query_types:
+        lines.extend(["", "## Query-Type Quality", ""])
+        for qtype in query_types:
+            lines.extend([
+                f"### {qtype}",
+                "",
+                f"| Engine | Queries | Hit@1 | MRR | Recall@{top_k} |",
+                "|---|---:|---:|---:|---:|",
+            ])
+            for row in report["engines"]:
+                metrics = row.get("metrics") or {}
+                group = metrics.get("by_query_type", {}).get(qtype)
+                if not group:
+                    continue
+                lines.append(
+                    f"| {row['name']} | {group['queries']} | {group['hit_at_1']} | "
+                    f"{group['mrr']} | {group[f'recall_at_{top_k}']} |"
+                )
+            lines.append("")
     lines.extend([
         "",
         "## Notes",
@@ -891,7 +1031,10 @@ def run(args: argparse.Namespace) -> dict:
     out_dir = Path(args.out_dir).resolve()
     reset_dir(out_dir)
     docs = load_corpus(benchmark_dir)
-    queries = load_queries(benchmark_dir, Path(args.queries).resolve() if args.queries else None)
+    queries = resolve_labelled_queries(
+        load_queries(benchmark_dir, Path(args.queries).resolve() if args.queries else None),
+        docs,
+    )
     if args.max_queries:
         queries = queries[: args.max_queries]
     rerank_profile = code_rerank_profile(
