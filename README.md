@@ -40,36 +40,40 @@ Spectrum is not attempting to compete with gzip, Brotli, or zstd as a pure byte 
 
 # Current Production-Shaped Signal
 
-Latest large-corpus benchmark using the `accurate` Spectrum serving profile on a Linux-scale repository corpus:
+Latest large-corpus benchmark using the `accurate` Spectrum serving profile on
+the same 72,601-document Linux-scale repository corpus. Rebench run:
+2026-05-11, 80 generated file/path queries, top-k 5, hydrate-limit 5.
 
-| Metric                | Spectrum serving (`accurate`) |
-| --------------------- | ----------------------------: |
-| Corpus documents      |                        72,601 |
-| Raw corpus bytes      |                 1,028,410,590 |
-| Stored Spectrum bytes |                   413,915,926 |
-| Compression ratio     |              0.3585x raw size |
-| Lossless decode       |                           Yes |
-| Hit@1                 |                        0.7375 |
-| MRR                   |                        0.7438 |
-| Recall@5              |                        0.7500 |
-| Avg query time        |                       3.07 ms |
-| Avg hydrate time      |                       3.13 ms |
-| Avg end-to-end        |                       6.20 ms |
-| P95 end-to-end        |                       7.49 ms |
-| Avg CPU end-to-end    |                       6.25 ms |
-| CPU utilization       |                       100.81% |
-| Peak RSS memory       |                       ~3.1 GB |
+| Metric                                  | Spectrum serving (`accurate`) |
+| --------------------------------------- | ----------------------------: |
+| Corpus documents                        |                        72,601 |
+| Raw corpus bytes                        |                 1,028,410,590 |
+| Compact `.spec` store bytes             |                   368,706,401 |
+| Compact `.spec` ratio                   |              0.3585x raw size |
+| Serving store + snippet sidecar bytes   |                   502,080,081 |
+| Serving footprint ratio                 |              0.4882x raw size |
+| Lossless decode                         |                           Yes |
+| Hit@1                                   |                        0.8500 |
+| MRR                                     |                        0.8625 |
+| Recall@5                                |                        0.8750 |
+| Avg query time                          |                       3.75 ms |
+| Avg hydrate time                        |                       4.78 ms |
+| Avg end-to-end                          |                       8.53 ms |
+| P95 end-to-end                          |                      32.41 ms |
+| Avg CPU end-to-end                      |                       8.01 ms |
+| CPU utilization                         |                        93.89% |
+| Peak RSS memory                         |                       ~3.1 GB |
 
 Key observations:
 
-* Retrieval quality scaled successfully to a 72k-document corpus after introducing graded candidate weighting and bounded reranking.
+* Retrieval quality improved on the same 72k-document corpus after the latest ranking and serving changes.
 * The accurate reranking stage itself remains sub-millisecond because reranking only evaluates the top candidate set rather than the entire corpus.
 * Spectrum serving operates as a retrieval-aware storage layer:
 
   * compact `.spec` payloads remain lossless,
   * snippets are served without full hydration,
   * and only selected payloads are byte-prism decoded on demand.
-* The current optimization frontier is candidate generation and memory efficiency, not reranking throughput.
+* The current optimization frontier is candidate generation, fallback-query latency, sidecar footprint, and memory efficiency, not reranking throughput.
 
 ---
 

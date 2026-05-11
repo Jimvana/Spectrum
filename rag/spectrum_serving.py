@@ -16,6 +16,7 @@ payload path.
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import zipfile
@@ -366,6 +367,18 @@ def title_token_index(documents: list[dict]) -> dict[int, list[int]]:
     return index
 
 
+def path_term_index(documents: list[dict]) -> dict[str, list[int]]:
+    index: dict[str, list[int]] = {}
+    for doc in documents:
+        doc_id = int(doc["id"])
+        source_path = str(doc.get("source_path", doc.get("title", "")))
+        path = Path(source_path)
+        path_text = " ".join((*path.parts, path.stem))
+        for term in set(_split_code_words(path_text)):
+            index.setdefault(term, []).append(doc_id)
+    return index
+
+
 @dataclass(frozen=True)
 class SpectrumSearchResult:
     id: int
@@ -395,6 +408,7 @@ class CandidatePolicy:
     graded_weighting: bool = True
     min_candidate_weight: float = DEFAULT_MIN_CANDIDATE_WEIGHT
     fallback_to_full_search: bool = True
+    title_fallback_max_candidates: int = DEFAULT_MAX_PRECANDIDATES
 
 
 class SpectrumServingRetriever:
@@ -455,6 +469,7 @@ class SpectrumServingRetriever:
         self.candidate_policy = candidate_policy
         self.full_decoder = full_decoder
         self.title_index = title_token_index(self.documents) if title_boost else None
+        self.path_term_index = path_term_index(self.documents)
         self.reranker = (
             CodeSignalReranker(self.documents, snippets_by_id, rerank_profile)
             if rerank_profile and rerank_profile.candidates > 0
@@ -580,6 +595,97 @@ class SpectrumServingRetriever:
                 strong_ids.add(int(row["token_id"]))
         return strong_ids
 
+    def _title_fallback_search(
+        self,
+        query: str,
+        query_ids: list[int],
+        token_stats: list[dict],
+        token_weights: dict[int, float],
+        candidate_limit: int,
+    ) -> tuple[list[int], dict]:
+        if not self.title_index and not self.path_term_index:
+            return [], {
+                "title_candidate_pool": 0,
+                "title_generation_token_ids": [],
+                "path_generation_terms": [],
+            }
+
+        stats_by_id = {int(row["token_id"]): row for row in token_stats}
+        title_token_ids = [
+            token_id for token_id in dict.fromkeys(query_ids)
+            if (
+                token_id in (self.title_index or {})
+                and stats_by_id.get(token_id, {}).get("token_type") != "common"
+                and any(ch.isalnum() for ch in _token_text(token_id))
+            )
+        ]
+        title_token_ids.sort(
+            key=lambda token_id: (
+                len(self.title_index.get(token_id, ())),
+                -token_weights.get(token_id, 0.0),
+                token_id,
+            )
+        )
+
+        max_candidates = max(candidate_limit, self.candidate_policy.title_fallback_max_candidates)
+        scores: dict[int, float] = {}
+        matched_counts: dict[int, int] = {}
+        path_terms = [
+            term for term in _rerank_query_terms(query)
+            if term in self.path_term_index
+        ]
+        path_terms.sort(key=lambda term: (len(self.path_term_index.get(term, ())), term))
+        for term in path_terms:
+            if len(scores) >= max_candidates:
+                break
+            docs = self.path_term_index.get(term, ())
+            if not docs:
+                continue
+            df = max(1, len(docs))
+            term_idf = math.log((max(1, self.bm25.N) - df + 0.5) / (df + 0.5) + 1)
+            remaining = max_candidates - len(scores)
+            for doc_id in docs[:remaining]:
+                scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 + term_idf
+                matched_counts[doc_id] = matched_counts.get(doc_id, 0) + 1
+
+        for token_id in title_token_ids:
+            if len(scores) >= max_candidates:
+                break
+            docs = self.title_index.get(token_id, ())
+            if not docs:
+                continue
+            df = max(1, len(docs))
+            title_idf = math.log((max(1, self.bm25.N) - df + 0.5) / (df + 0.5) + 1)
+            # Common terms can be useful in path searches when combined with rarer terms,
+            # but should not dominate fallback ranking on their own.
+            token_score = max(token_weights.get(token_id, 0.0), title_idf / max(math.log(self.bm25.N + 1), 1.0))
+            remaining = max_candidates - len(scores)
+            for doc_id in docs[:remaining]:
+                scores[doc_id] = scores.get(doc_id, 0.0) + token_score
+                matched_counts[doc_id] = matched_counts.get(doc_id, 0) + 1
+
+        if not scores:
+            return [], {
+                "title_candidate_pool": 0,
+                "title_generation_token_ids": title_token_ids,
+                "path_generation_terms": path_terms,
+            }
+
+        ranked = sorted(
+            scores.items(),
+            key=lambda item: (
+                -matched_counts.get(item[0], 0),
+                -item[1],
+                item[0],
+            ),
+        )
+        doc_ids = [doc_id for doc_id, _score in ranked[:candidate_limit]]
+        return doc_ids, {
+            "title_candidate_pool": len(scores),
+            "title_generation_token_ids": title_token_ids,
+            "path_generation_terms": path_terms,
+        }
+
     def search_ids_with_trace(
         self,
         query: str,
@@ -590,6 +696,7 @@ class SpectrumServingRetriever:
         expanded_query, aliases = expand_query_aliases(query)
         query_ids = retrieval_token_ids(expanded_query)
         token_stats = self.query_token_stats(expanded_query)
+        token_weights: dict[int, float] = {}
         raw_postings_matches = (
             len(self.bm25.candidate_ids(query_ids))
             if include_raw_postings
@@ -597,6 +704,8 @@ class SpectrumServingRetriever:
         )
         retrieval_started = time.perf_counter()
         used_fallback = False
+        fallback_strategy = ""
+        title_fallback_trace: dict = {}
         if self.candidate_policy and self.candidate_policy.enabled:
             doc_ids, trace = self.bm25.selective_search(
                 query_ids,
@@ -612,20 +721,38 @@ class SpectrumServingRetriever:
                 graded_weighting=self.candidate_policy.graded_weighting,
                 min_candidate_weight=self.candidate_policy.min_candidate_weight,
             )
+            token_weights = {
+                int(token_id): float(weight)
+                for token_id, weight in trace.get("token_weights", {}).items()
+            }
             if (
                 self.candidate_policy.fallback_to_full_search
                 and len(doc_ids) < top_k
             ):
-                fallback_ids = self.bm25.search(
+                title_fallback_ids, title_fallback_trace = self._title_fallback_search(
+                    expanded_query,
                     query_ids,
+                    token_stats,
+                    token_weights,
                     candidate_count,
-                    max_df_ratio=self.max_df_ratio,
-                    title_index=self.title_index,
-                    title_boost=self.title_boost,
                 )
-                merged_doc_ids = list(dict.fromkeys([*doc_ids, *fallback_ids]))
-                doc_ids = merged_doc_ids[:candidate_count]
-                used_fallback = True
+                if title_fallback_ids:
+                    merged_doc_ids = list(dict.fromkeys([*doc_ids, *title_fallback_ids]))
+                    doc_ids = merged_doc_ids[:candidate_count]
+                    used_fallback = True
+                    fallback_strategy = "title_index"
+                else:
+                    fallback_ids = self.bm25.search(
+                        query_ids,
+                        candidate_count,
+                        max_df_ratio=self.max_df_ratio,
+                        title_index=self.title_index,
+                        title_boost=self.title_boost,
+                    )
+                    merged_doc_ids = list(dict.fromkeys([*doc_ids, *fallback_ids]))
+                    doc_ids = merged_doc_ids[:candidate_count]
+                    used_fallback = True
+                    fallback_strategy = "full_bm25"
         else:
             doc_ids = self.bm25.search(
                 query_ids,
@@ -652,6 +779,8 @@ class SpectrumServingRetriever:
             "initial_postings_matches": trace.get("candidate_pool", raw_postings_matches),
             "reranker_in": len(doc_ids),
             "used_fallback_search": used_fallback,
+            "fallback_strategy": fallback_strategy,
+            **title_fallback_trace,
             "hydrated": 0,
             "retrieval_ms": retrieval_ms,
             "rerank_ms": rerank_ms,
