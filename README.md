@@ -154,7 +154,9 @@ New ecosystem work lives under `packages/`, with each element in its own subdire
 * `packages/connectors` and `packages/integrations` for data imports and framework adapters.
 * `packages/cloud` for optional hosted/team experiments.
 
-The full ecosystem plan is tracked in `docs/ecosystem_architecture.md`.
+The full ecosystem plan is tracked in `docs/ecosystem_architecture.md`. The
+developer manual for the SDKs, CLI, HTTP API, and RAG workflows is
+`ECOSYSTEM_MANUAL.md`.
 
 ## Try The Demo
 
