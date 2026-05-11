@@ -25,6 +25,7 @@ test("creates, verifies, inspects, and unpacks a Spectrum pack", async () => {
       PYTHONPATH: [
         join(repoRoot, "packages/core/src"),
         join(repoRoot, "packages/cli/src"),
+        join(repoRoot, "packages/index/src"),
       ].join(process.platform === "win32" ? ";" : ":"),
     },
   };
@@ -32,6 +33,10 @@ test("creates, verifies, inspects, and unpacks a Spectrum pack", async () => {
   const pack = await SpectrumPack.create({ inputPath: docs, outputPath: packPath }, sdkOptions);
   assert.equal((await pack.inspect()).entries, 1);
   assert.equal((await pack.verify()).valid, true);
+  assert.equal((await pack.buildIndex()).embedded, true);
+  const results = await pack.search("js sdk round trip", { topK: 1 });
+  assert.equal(results[0].path.endsWith("note.md.spec"), true);
+  assert.equal(results[0].source_path, "note.md");
 
   const unpacked = await pack.unpack(decoded);
   assert.equal(unpacked.length, 1);

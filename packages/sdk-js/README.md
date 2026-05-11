@@ -17,6 +17,8 @@ const pack = await SpectrumPack.create({
 
 console.log(await pack.inspect());
 console.log(await pack.verify());
+await pack.buildIndex();
+console.log(await pack.search("authentication middleware", { topK: 5 }));
 
 const decoded = await pack.unpack("./decoded");
 console.log(decoded);
@@ -31,9 +33,9 @@ const sdkOptions = {
   baseArgs: ["-m", "spectrum_cli.main"],
   env: {
     ...process.env,
-    PYTHONPATH: "packages/core/src;packages/cli/src",
+    PYTHONPATH: "packages/core/src;packages/cli/src;packages/index/src",
   },
 };
 ```
 
-Search and richer result APIs will be added after the index package is split out.
+Richer result APIs will be added as the index package matures.

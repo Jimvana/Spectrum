@@ -15,6 +15,7 @@ from spectrum_core import (
     unpack,
     verify_path,
 )
+from spectrum_index import build_index, search_pack
 
 
 def _json_default(value):
@@ -86,6 +87,26 @@ def command_verify(args: argparse.Namespace) -> int:
     return 0 if report.valid else 1
 
 
+def command_index(args: argparse.Namespace) -> int:
+    result = build_index(args.input, output_path=args.output, embed=args.embed, verbose=args.verbose)
+    payload = {key: value for key, value in result.items() if key != "index"}
+    emit(payload, as_json=args.json)
+    return 0
+
+
+def command_search(args: argparse.Namespace) -> int:
+    results = search_pack(
+        args.pack,
+        args.query,
+        top_k=args.top,
+        language=args.language,
+        index_path=args.index,
+        build_if_missing=not args.no_build,
+    )
+    emit(results, as_json=args.json)
+    return 0
+
+
 def add_common_codec_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", help="Force a language instead of extension detection")
     parser.add_argument("--rle", default="off", choices=["off", "auto", "force"], help="RLE mode")
@@ -134,6 +155,24 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("input")
     verify.add_argument("--json", action="store_true")
     verify.set_defaults(func=command_verify)
+
+    index = sub.add_parser("index", help="Build a retrieval index for .spec, .spec directory, or .specpack")
+    index.add_argument("input")
+    index.add_argument("-o", "--output", help="Output index path")
+    index.add_argument("--embed", action="store_true", help="Embed index.bin into a .specpack")
+    index.add_argument("--verbose", action="store_true")
+    index.add_argument("--json", action="store_true")
+    index.set_defaults(func=command_index)
+
+    search = sub.add_parser("search", help="Search a .specpack")
+    search.add_argument("pack")
+    search.add_argument("query")
+    search.add_argument("--top", type=int, default=10)
+    search.add_argument("--language", default="txt")
+    search.add_argument("--index", help="Use a separate index file")
+    search.add_argument("--no-build", action="store_true", help="Fail if no index is available")
+    search.add_argument("--json", action="store_true")
+    search.set_defaults(func=command_search)
 
     return parser
 

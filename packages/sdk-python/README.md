@@ -45,4 +45,12 @@ decoded = pack.unpack("./decoded")
 print(decoded[0].content)
 ```
 
-Search and incremental document updates will be added after the index and memory packages are split out under `packages/`.
+Search:
+
+```python
+pack.build_index()
+results = pack.search("authentication middleware", top_k=5)
+```
+
+Incremental document updates will be added after the memory/connectors packages
+are split out under `packages/`.

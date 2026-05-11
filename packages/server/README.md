@@ -20,7 +20,9 @@ Endpoints:
 - `GET /packs/{pack_id}`
 - `DELETE /packs/{pack_id}`
 - `POST /packs/{pack_id}/verify`
+- `POST /packs/{pack_id}/index` with `{"embed": true}`
+- `POST /packs/{pack_id}/search` with `{"query": "authentication middleware", "top_k": 5}`
 - `POST /packs/{pack_id}/unpack` with `{"output_dir": "./decoded"}`
 
-Search, document ingestion, and memory endpoints will be added after the index
-and memory packages are split out.
+Document ingestion, memory, and benchmark endpoints will be added after the
+remaining packages are split out.

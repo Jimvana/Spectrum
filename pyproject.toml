@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+pythonpath = [
+  "packages/core/src",
+  "packages/index/src",
+  "packages/cli/src",
+  "packages/sdk-python",
+  "packages/server/src",
+]
+testpaths = [
+  "packages/core/tests",
+  "packages/index/tests",
+  "packages/cli/tests",
+  "packages/sdk-python/tests",
+  "packages/server/tests",
+]

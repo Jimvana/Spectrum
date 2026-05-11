@@ -1,21 +1,47 @@
-MIT License
+Spectrum Non-Commercial License
 
 Copyright (c) 2026 Jimvana
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission is granted, free of charge, to use, copy, modify, and distribute
+this software and its associated documentation for non-profit and
+non-commercial purposes only, subject to the terms below.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Permitted use
+
+You may use this software for personal, educational, research, charitable, or
+other non-profit purposes, provided that your use is not primarily intended for
+commercial advantage or monetary compensation.
+
+2. Restrictions
+
+You may not use this software, modified or unmodified, for any commercial
+purpose without prior written permission from the copyright holder.
+
+Commercial purposes include, without limitation:
+
+- selling, licensing, sublicensing, renting, or otherwise charging for copies of
+  the software;
+- offering the software, or a modified version of it, as part of a paid product,
+  paid service, hosted service, subscription, consultancy, or support offering;
+- using the software internally to support a for-profit business operation; or
+- distributing the software in a way that enables others to use it commercially.
+
+3. Redistribution
+
+Any permitted copy or distribution of this software must include this license
+and the copyright notice above.
+
+4. Commercial licensing
+
+Commercial use is not granted under this license. To request commercial rights,
+contact the copyright holder for a separate written license.
+
+5. No warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.

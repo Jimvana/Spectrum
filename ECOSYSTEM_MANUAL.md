@@ -9,6 +9,7 @@ the dictionary should be expanded before the core format is treated as stable.
 
 - `packages/core` - `.spec` encode/decode, `.specpack` pack/unpack, inspection, verification.
 - `packages/cli` - command line wrapper over `spectrum_core`.
+- `packages/index` - retrieval indexes and BM25 search over Spectrum packs.
 - `packages/sdk-python` - Python SDK for app developers.
 - `packages/sdk-js` - JavaScript SDK backed by the CLI/core command.
 - `packages/server` - local HTTP API over Spectrum packs.
@@ -18,21 +19,24 @@ the dictionary should be expanded before the core format is treated as stable.
 From the repo root:
 
 ```powershell
-$env:PYTHONPATH='packages/core/src;packages/cli/src;packages/sdk-python;packages/server/src'
+python scripts/test.py
 ```
 
-Run Python tests:
+Run only Python tests:
 
 ```powershell
-python -m pytest packages/core/tests packages/cli/tests packages/sdk-python/tests packages/server/tests
+python scripts/test.py --python-only
 ```
 
-Run JavaScript SDK tests:
+Run only JavaScript SDK tests:
 
 ```powershell
-cd packages/sdk-js
-npm test
+python scripts/test.py --js-only
 ```
+
+The root `pyproject.toml` also configures package paths for pytest, so
+`python -m pytest` works from the repo root without manually setting
+`PYTHONPATH`.
 
 ## Core API
 
@@ -72,6 +76,8 @@ Run locally:
 python -m spectrum_cli.main pack ./docs ./docs.specpack --json
 python -m spectrum_cli.main inspect ./docs.specpack --json
 python -m spectrum_cli.main verify ./docs.specpack --json
+python -m spectrum_cli.main index ./docs.specpack --embed --json
+python -m spectrum_cli.main search ./docs.specpack "authentication middleware" --json
 python -m spectrum_cli.main unpack ./docs.specpack ./decoded --json
 ```
 
@@ -83,6 +89,8 @@ Current commands:
 - `unpack <input> <output>`
 - `inspect <input>`
 - `verify <input>`
+- `index <input>`
+- `search <pack> <query>`
 
 Planned npm package name: `spectrumstore`, exposing `spectrum` and
 `spectrumstore` commands once the bundled CLI is ready.
@@ -105,6 +113,8 @@ pack = SpectrumPack.create(
 
 print(pack.inspect())
 print(pack.verify())
+pack.build_index()
+print(pack.search("authentication middleware", top_k=5))
 ```
 
 Create from in-memory documents:
@@ -147,6 +157,8 @@ const pack = await SpectrumPack.create({
 
 console.log(await pack.inspect());
 console.log(await pack.verify());
+await pack.buildIndex();
+console.log(await pack.search("authentication middleware", { topK: 5 }));
 await pack.unpack("./decoded");
 ```
 
@@ -158,7 +170,7 @@ const sdkOptions = {
   baseArgs: ["-m", "spectrum_cli.main"],
   env: {
     ...process.env,
-    PYTHONPATH: "packages/core/src;packages/cli/src",
+    PYTHONPATH: "packages/core/src;packages/cli/src;packages/index/src",
   },
 };
 ```
@@ -179,6 +191,8 @@ Endpoints:
 - `GET /packs/{pack_id}`
 - `DELETE /packs/{pack_id}`
 - `POST /packs/{pack_id}/verify`
+- `POST /packs/{pack_id}/index` with `{"embed": true}`
+- `POST /packs/{pack_id}/search` with `{"query": "authentication middleware", "top_k": 5}`
 - `POST /packs/{pack_id}/unpack` with `{"output_dir": "./decoded"}`
 
 Example:
@@ -191,9 +205,8 @@ Invoke-RestMethod http://127.0.0.1:7777/packs/docs
 ## Current Gaps
 
 - Dictionary expansion should happen before format/API stability claims.
-- Search and benchmark commands remain in the legacy CLI until `packages/index`
-  is built.
+- Benchmark commands remain in the legacy CLI for now.
 - JS SDK currently shells out to the CLI/core command; it is not a native JS
   encoder.
-- Server currently covers pack lifecycle, inspection, verify, and unpack. Search,
-  ingestion, memory, and benchmark endpoints come later.
+- Server currently covers pack lifecycle, inspection, verify, index, search, and
+  unpack. Ingestion, memory, and benchmark endpoints come later.

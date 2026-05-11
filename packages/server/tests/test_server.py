@@ -50,6 +50,15 @@ def test_server_pack_lifecycle(tmp_path: Path) -> None:
         assert status == 200
         assert verified["valid"]
 
+        status, indexed = request(port, "POST", "/packs/docs/index", {"embed": True})
+        assert status == 200
+        assert indexed["embedded"]
+
+        status, searched = request(port, "POST", "/packs/docs/search", {"query": "server http round trip", "top_k": 1})
+        assert status == 200
+        assert searched["results"][0]["path"].endswith("note.md.spec")
+        assert searched["results"][0]["source_path"] == "note.md"
+
         decoded = tmp_path / "decoded"
         status, unpacked = request(port, "POST", "/packs/docs/unpack", {"output_dir": str(decoded)})
         assert status == 200

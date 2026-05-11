@@ -39,3 +39,19 @@ def test_sdk_from_documents(tmp_path: Path) -> None:
     decoded = pack.unpack(tmp_path / "decoded")
     assert decoded[0].path == "notes/memory.md"
     assert decoded[0].content == "James wants Spectrum to stay local-first.\n"
+
+
+def test_sdk_build_index_and_search(tmp_path: Path) -> None:
+    pack_path = tmp_path / "search.specpack"
+    pack = SpectrumPack.from_documents(
+        [
+            Document(id="auth", path="auth.md", content="Authentication middleware validates bearer tokens.\n"),
+            Document(id="billing", path="billing.md", content="Invoices and receipts are stored here.\n"),
+        ],
+        pack_path,
+    )
+
+    assert pack.build_index()["embedded"]
+    results = pack.search("authentication bearer middleware", top_k=1)
+    assert results[0]["path"].endswith("auth.md.spec")
+    assert results[0]["source_path"] == "auth.md"

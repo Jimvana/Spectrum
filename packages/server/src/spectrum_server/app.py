@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from spectrum_core import SpectrumPack, inspect_pack, unpack, verify_pack
+from spectrum_index import build_pack_index, search_pack
 
 SERVER_VERSION = "0.1.0"
 
@@ -121,6 +122,31 @@ def create_handler(registry: PackRegistry | None = None):
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "verify" and method == "POST":
                 return verify_pack(registry.get(parts[1])).to_dict()
+
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "index" and method == "POST":
+                body = self._read_json()
+                result = build_pack_index(
+                    registry.get(parts[1]),
+                    output_path=body.get("output_path"),
+                    embed=bool(body.get("embed", True)),
+                )
+                return {key: value for key, value in result.items() if key != "index"}
+
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "search" and method == "POST":
+                body = self._read_json()
+                query = str(body.get("query") or "")
+                if not query:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "query is required")
+                return {
+                    "results": search_pack(
+                        registry.get(parts[1]),
+                        query,
+                        top_k=int(body.get("top_k", 10)),
+                        language=body.get("language", "txt"),
+                        index_path=body.get("index_path"),
+                        build_if_missing=bool(body.get("build_if_missing", True)),
+                    )
+                }
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "unpack" and method == "POST":
                 body = self._read_json()

@@ -32,6 +32,8 @@ export class SpectrumPack {
   static create(options: CreatePackOptions, sdkOptions?: SpectrumSdkOptions): Promise<SpectrumPack>;
   inspect(): Promise<Record<string, unknown>>;
   verify(): Promise<Record<string, unknown>>;
+  buildIndex(options?: { embed?: boolean; outputPath?: string }): Promise<Record<string, unknown>>;
+  search(query: string, options?: { topK?: number; language?: string; indexPath?: string; buildIfMissing?: boolean }): Promise<Record<string, unknown>[]>;
   unpack(outputDir: string): Promise<DecodedDocument[]>;
 }
 
