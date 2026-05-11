@@ -116,7 +116,10 @@ def add_common_codec_options(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="spectrum-core", description="Spectrum Core command line tools")
+    parser = argparse.ArgumentParser(
+        prog="spectrum",
+        description="Spectrum Store Developer Preview command line tools",
+    )
     sub = parser.add_subparsers(dest="command")
 
     encode = sub.add_parser("encode", help="Encode one file to .spec")
@@ -186,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
-        print(f"spectrum-core: {exc}", file=sys.stderr)
+        print(f"spectrum: {exc}", file=sys.stderr)
         return 1
 
 

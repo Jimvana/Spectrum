@@ -1,0 +1,23 @@
+{
+  "name": "spectrumstore",
+  "version": "0.1.0-preview.0",
+  "description": "Spectrum Store Developer Preview: local-first lossless searchable .specpack stores.",
+  "bin": {
+    "spectrum": "./bin/spectrumstore.js",
+    "spectrumstore": "./bin/spectrumstore.js"
+  },
+  "files": [
+    "bin",
+    "packages/core/src/**/*.py",
+    "packages/index/src/**/*.py",
+    "packages/cli/src/**/*.py",
+    "CLI Tool/vendor/spectrum_algo/**/*.py",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "private": false
+}
