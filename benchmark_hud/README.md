@@ -54,3 +54,7 @@ Run a one-off benchmark against a public GitHub repo:
 ```powershell
 python benchmark_hud/server.py --once custom --repo pallets/click --queries 4
 ```
+
+Large repositories can take several minutes to clone and scan. The HUD keeps the
+event stream alive with clone progress messages and stores generated data under
+`benchmark_hud/runs/`.

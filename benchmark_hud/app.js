@@ -238,6 +238,10 @@ function handleComplete(data) {
 function handleError(data) {
   els.phaseLabel.textContent = "ERROR";
   addEvent("ERROR", data.message || "benchmark failed");
+  if (state.source) {
+    state.source.close();
+    state.source = null;
+  }
 }
 
 function startRun() {

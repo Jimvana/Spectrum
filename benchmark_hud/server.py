@@ -412,24 +412,17 @@ def normalize_github_repo(value: str) -> tuple[str, str]:
     return url, slug or "github-repo"
 
 
-def clone_github_repo(repo: str, run_dir: Path) -> Path:
+def prepare_github_clone(repo: str, run_dir: Path) -> tuple[str, str, Path]:
     git = shutil.which("git")
     if git is None:
         raise RuntimeError("git was not found on PATH")
     url, slug = normalize_github_repo(repo)
     target = run_dir / "source" / slug
     target.parent.mkdir(parents=True, exist_ok=True)
-    started = time.perf_counter()
-    result = subprocess.run(
-        [git, "clone", "--depth", "1", "--filter=blob:none", url, str(target)],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    if result.returncode:
-        error = (result.stderr or result.stdout or "git clone failed").strip().splitlines()[-1]
-        raise RuntimeError(error)
+    return git, url, target
+
+
+def write_clone_metadata(repo: str, url: str, target: Path, run_dir: Path, started: float) -> None:
     (run_dir / "source.json").write_text(
         json.dumps(
             {
@@ -443,7 +436,54 @@ def clone_github_repo(repo: str, run_dir: Path) -> Path:
         ),
         encoding="utf-8",
     )
+
+
+def clone_github_repo(repo: str, run_dir: Path, *, timeout_seconds: int = 1_200) -> Path:
+    git, url, target = prepare_github_clone(repo, run_dir)
+    started = time.perf_counter()
+    result = subprocess.run(
+        [git, "clone", "--quiet", "--depth", "1", "--filter=blob:none", url, str(target)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    if result.returncode:
+        error = (result.stderr or result.stdout or "git clone failed").strip().splitlines()[-1]
+        raise RuntimeError(error)
+    write_clone_metadata(repo, url, target, run_dir, started)
     return target
+
+
+def clone_github_repo_events(repo: str, run_dir: Path, *, timeout_seconds: int = 1_200) -> Iterable[dict]:
+    git, url, target = prepare_github_clone(repo, run_dir)
+    started = time.perf_counter()
+    process = subprocess.Popen(
+        [git, "clone", "--quiet", "--depth", "1", "--filter=blob:none", url, str(target)],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    last_tick = 0
+    while process.poll() is None:
+        elapsed = int(time.perf_counter() - started)
+        if elapsed >= timeout_seconds:
+            process.kill()
+            process.communicate()
+            raise RuntimeError(f"git clone timed out after {timeout_seconds} seconds")
+        if elapsed >= last_tick:
+            yield emit("phase", {"message": f"Cloning GitHub repository ({elapsed}s)", "repo": repo})
+            last_tick = elapsed + 5
+        time.sleep(0.5)
+
+    stdout, stderr = process.communicate()
+    if process.returncode:
+        error = (stderr or stdout or "git clone failed").strip().splitlines()[-1]
+        raise RuntimeError(error)
+    write_clone_metadata(repo, url, target, run_dir, started)
+    yield emit("phase", {"message": "GitHub repository cloned", "repo": repo, "path": rel_path(target)})
+    yield {"type": "_clone_done", "path": target}
 
 
 def encode_code_to_spec_bytes(text: str, source_path: str, language_id: int) -> tuple[bytes, list[int]]:
@@ -861,7 +901,11 @@ def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: 
             return
         yield emit("phase", {"message": "Cloning GitHub repository", "run_id": run_id})
         try:
-            custom_root = clone_github_repo(repo_url, run_dir)
+            for event in clone_github_repo_events(repo_url, run_dir):
+                if event["type"] == "_clone_done":
+                    custom_root = event["path"]
+                    continue
+                yield event
         except Exception as exc:
             yield emit("error", {"message": str(exc), "preset": preset_name})
             return
