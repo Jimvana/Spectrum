@@ -8,6 +8,21 @@ Spectrum is a deterministic retrieval-aware encoding layer for compact, lossless
 
 Watch Spectrum benchmarked against TF-IDF, Raw BM25, Dense Vector retrieval, and FAISS Flat, including live retrieval, decoding, and byte-for-byte fidelity verification.
 
+## Why Spectrum Matters
+
+Spectrum combines storage and retrieval into one deterministic representation.
+Instead of keeping raw chunks, compressed archives, and separate search indexes,
+Spectrum stores source material as compact `.specpack` data that can be searched,
+retrieved, decoded, and verified back to the original bytes.
+
+This makes it useful for:
+
+- AI agent memory
+- codebase retrieval
+- local RAG systems
+- compact searchable archives
+- exact reconstruction of source context
+
 ## Spectrum Store Developer Preview
 
 The first turnkey product surface is **Spectrum Store Developer Preview**: a
