@@ -51,6 +51,43 @@ the preview npm package bundles the Python Spectrum CLI, index layer, core API,
 and current codec runtime so users do not need to set `PYTHONPATH` or
 `SPECTRUM_REPO_ROOT` manually.
 
+## Spectrum Benchmark HUD
+
+The repository includes a local Benchmark HUD for visually comparing Spectrum
+against common retrieval baselines on real code corpora. It streams live build,
+size, latency, recall, and MRR events for:
+
+* Spectrum SPB,
+* TF-IDF,
+* raw BM25,
+* dense vectors,
+* and FAISS Flat when available.
+
+Run it from the repository root on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\benchmark_hud\launch-windows.ps1
+```
+
+Run it from the repository root on macOS:
+
+```bash
+chmod +x benchmark_hud/launch-mac.command
+./benchmark_hud/launch-mac.command
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765
+```
+
+Use `Small`, `Medium`, or `Large` for built-in corpora, or choose `My own repo`
+and enter a public GitHub repository as `owner/name` or
+`https://github.com/owner/name`. Custom repo runs clone the repository into that
+run's local artifact folder and benchmark it with the same engines. Generated
+run artifacts are written under `benchmark_hud/runs/` and are ignored by Git.
+
 The project explores a simple idea:
 
 > The compressed artifact and the retrieval representation can be the same thing.

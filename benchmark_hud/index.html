@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spectrum Benchmark HUD</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="spectrum-strip" aria-hidden="true"></div>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">SPECTRUM BENCHMARK HUD</p>
+          <h1>Live retrieval league</h1>
+        </div>
+        <div class="status-bank">
+          <div>
+            <span>RUN</span>
+            <strong id="runId">idle</strong>
+          </div>
+          <div>
+            <span>CORPUS</span>
+            <strong id="corpusMeta">-</strong>
+          </div>
+          <div>
+            <span>RAW</span>
+            <strong id="rawBytes">-</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="control-row" aria-label="Benchmark controls">
+        <div class="preset-group" id="presetGroup">
+          <button class="preset active" data-preset="small">Small</button>
+          <button class="preset" data-preset="medium">Medium</button>
+          <button class="preset" data-preset="large">Large</button>
+          <button class="preset" data-preset="custom">My own repo</button>
+        </div>
+        <label class="repo-control" id="repoControl">
+          <span>GitHub repo</span>
+          <input id="repoInput" type="url" placeholder="owner/name or https://github.com/owner/name" spellcheck="false" />
+        </label>
+        <label class="query-control">
+          <span>Queries</span>
+          <input id="queryCount" type="range" min="6" max="90" value="18" />
+          <strong id="queryValue">18</strong>
+        </label>
+        <button id="startBtn" class="command">Start run</button>
+        <button id="stopBtn" class="command ghost">Abort</button>
+      </section>
+
+      <section class="market-grid">
+        <div class="panel wide">
+          <div class="panel-head">
+            <span>ENGINE TAPE</span>
+            <strong id="phaseLabel">STANDBY</strong>
+          </div>
+          <div id="engineGrid" class="engine-grid"></div>
+        </div>
+
+        <aside class="panel tape-panel">
+          <div class="panel-head">
+            <span>EVENTS</span>
+            <strong id="eventCount">0</strong>
+          </div>
+          <ol id="eventTape" class="event-tape"></ol>
+        </aside>
+      </section>
+
+      <section class="chart-row">
+        <div class="panel">
+          <div class="panel-head">
+            <span>SIZE PRESSURE</span>
+            <strong>STORE / RAW</strong>
+          </div>
+          <canvas id="sizeChart" height="150"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <span>SPEED TRACE</span>
+            <strong>AVG MS</strong>
+          </div>
+          <canvas id="speedChart" height="150"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <span>ACCURACY TRACE</span>
+            <strong>MRR</strong>
+          </div>
+          <canvas id="accuracyChart" height="150"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <div id="summaryModal" class="modal" aria-hidden="true">
+      <div class="modal-frame" role="dialog" aria-modal="true" aria-labelledby="summaryTitle">
+        <header class="modal-head">
+          <div>
+            <p class="eyebrow">BENCHMARK COMPLETE</p>
+            <h2 id="summaryTitle">Run metrics</h2>
+          </div>
+          <button id="closeModal" class="icon-command" aria-label="Close">X</button>
+        </header>
+        <div id="summaryBody" class="modal-body"></div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -35,6 +35,7 @@ wiki_enwiki_raw_sample/
 *.zim
 
 # Generated benchmark and encoding outputs
+benchmark_hud/runs/
 benchmarks/generated/
 benchmarks/prod_spectrum_*/spectrum_serving_pipeline/snippet_sidecar.json
 demo/runs/
