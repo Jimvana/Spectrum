@@ -2,6 +2,12 @@
 
 Spectrum is a deterministic retrieval-aware encoding layer for compact, lossless, searchable code and text stores.
 
+## Spectrum Benchmark Demo
+
+[![Watch the Spectrum benchmark demo](https://img.youtube.com/vi/vVIzw3rQUHI/maxresdefault.jpg)](https://youtu.be/vVIzw3rQUHI)
+
+Watch Spectrum benchmarked against TF-IDF, Raw BM25, Dense Vector retrieval, and FAISS Flat, including live retrieval, decoding, and byte-for-byte fidelity verification.
+
 ## Spectrum Store Developer Preview
 
 The first turnkey product surface is **Spectrum Store Developer Preview**: a
