@@ -104,9 +104,9 @@ Hydration means decoding selected `.spec` payloads back to source text. In RAG
 systems, search should produce a small ranked candidate set first; hydration
 should happen only for the items you want to show, open, or send to a model.
 
-The current SDK exposes whole-pack unpacking. The HTTP API also exposes a
-document-read endpoint by source path. More selective SDK hydration APIs are
-planned.
+The Python SDK exposes both whole-pack unpacking and `read_document()` for
+single-document hydration. The HTTP API also exposes a document-read endpoint by
+source path.
 
 ## Requirements
 
@@ -1388,13 +1388,13 @@ verify, file, value, and OS errors.
   format/API stability claims.
 - The JavaScript SDK shells out to the Python CLI/core command; it is not a
   native JS codec.
-- The Python SDK accepts document metadata but does not yet persist arbitrary
-  metadata into the core pack manifest.
+- The Python SDK persists document IDs and metadata into the core pack manifest
+  for packs created with `SpectrumPack.from_documents()`.
 - The server has no authentication and should be kept local unless wrapped by
   another trusted service layer.
 - Server pack registration is in memory.
-- SDK-level selective hydration is still limited. Current simple SDK examples
-  may unpack a whole pack and filter selected documents.
+- SDK-level selective hydration is available in the Python SDK through
+  `SpectrumPack.read_document()`.
 - Connector, memory, dashboard, cloud, LangChain, and LlamaIndex packages are
   currently package boundaries or placeholders rather than full integrations.
 - Demo, benchmark, and GUI commands still live in the legacy `CLI Tool`

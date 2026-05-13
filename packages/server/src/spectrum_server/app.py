@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from spectrum_core import SpectrumPack, inspect_pack, unpack, verify_pack
+from spectrum_core import SpectrumPack, decode_member, inspect_pack, unpack, verify_pack
 from spectrum_index import build_pack_index, search_pack
 
 SERVER_VERSION = "0.1.0"
@@ -156,22 +156,28 @@ def create_handler(registry: PackRegistry | None = None):
                 results = unpack(registry.get(parts[1]), output)
                 return {"results": results}
 
-            if len(parts) == 4 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
+            if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
                 pack_id = parts[1]
-                document_path = parts[3]
+                document_path = "/".join(parts[3:])
                 with tempfile.TemporaryDirectory(prefix="spectrum-server-doc-") as tmp_name:
                     tmp = Path(tmp_name)
-                    results = unpack(registry.get(pack_id), tmp)
-                    for result in results:
-                        rel = Path(result.output_path).relative_to(tmp).as_posix()
-                        if rel == document_path:
-                            data = Path(result.output_path).read_bytes()
-                            return {
-                                "path": rel,
-                                "content": data.decode("utf-8", errors="replace"),
-                                "content_bytes": list(data),
-                            }
-                raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {document_path}")
+                    output = tmp / "document"
+                    pack_path = registry.get(pack_id)
+                    with SpectrumPack.open(pack_path) as opened:
+                        entry = opened.find_entry(document_path)
+                        if entry is None:
+                            raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {document_path}")
+                    result = decode_member(pack_path, document_path, output)
+                    data = output.read_bytes()
+                    return {
+                        "path": entry.source,
+                        "id": entry.source_id,
+                        "metadata": entry.metadata or {},
+                        "content": data.decode("utf-8", errors="replace"),
+                        "content_bytes": list(data),
+                        "checksum_ok": result.checksum_ok,
+                        "length_ok": result.length_ok,
+                    }
 
             raise ApiError(HTTPStatus.NOT_FOUND, "route not found")
 

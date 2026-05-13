@@ -24,7 +24,8 @@ const decoded = await pack.unpack("./decoded");
 console.log(decoded);
 ```
 
-By default the SDK runs `spectrum-core`. During local development, pass a command
+By default the SDK runs `spectrum`, matching the root `spectrumstore` npm CLI.
+During local development, pass a command
 override:
 
 ```js

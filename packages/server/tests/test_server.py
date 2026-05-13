@@ -68,6 +68,38 @@ def test_server_pack_lifecycle(tmp_path: Path) -> None:
         status, packs = request(port, "GET", "/packs")
         assert status == 200
         assert packs["packs"][0]["id"] == "docs"
+
+        status, document = request(port, "GET", "/packs/docs/documents/note.md")
+        assert status == 200
+        assert document["path"] == "note.md"
+        assert document["checksum_ok"]
+        assert document["content"] == "# Server\r\n\r\nHTTP round trip.\r\n"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_reads_nested_document_without_full_unpack(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    nested = docs / "notes"
+    nested.mkdir(parents=True)
+    (nested / "memory.md").write_bytes(b"Nested document lookup.\n")
+    pack_path = tmp_path / "docs.specpack"
+    pack(docs, pack_path)
+
+    registry = PackRegistry()
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        assert request(port, "POST", "/packs", {"id": "docs", "path": str(pack_path)})[0] == 200
+        status, document = request(port, "GET", "/packs/docs/documents/notes/memory.md")
+        assert status == 200
+        assert document["path"] == "notes/memory.md"
+        assert document["content"] == "Nested document lookup.\n"
     finally:
         server.shutdown()
         server.server_close()

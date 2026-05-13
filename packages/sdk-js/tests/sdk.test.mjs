@@ -9,6 +9,11 @@ import { SpectrumPack } from "../src/index.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
+test("defaults to the root npm CLI command", () => {
+  const pack = SpectrumPack.open("docs.specpack", { env: {} });
+  assert.equal(pack.command, "spectrum");
+});
+
 test("creates, verifies, inspects, and unpacks a Spectrum pack", async () => {
   const root = await mkTempDir("spectrum-js-sdk-");
   const docs = join(root, "docs");

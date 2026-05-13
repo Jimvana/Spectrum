@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import spectrum_core._repo as _repo  # noqa: F401 - ensures repo modules are importable.
+from spectrum_core import SpectrumPack
 from rag.indexer import build_index as _build_spec_index
 from rag.indexer import index_directory, load_index as _load_index, save_index
 from rag.query import search as _search
@@ -36,8 +37,9 @@ def _replace_zip_member(zip_path: Path, member_path: Path, arcname: str) -> None
 
 
 def _extract_pack(pack_path: Path, tmp: Path) -> Path:
-    with zipfile.ZipFile(pack_path) as archive:
-        archive.extractall(tmp)
+    with SpectrumPack.open(pack_path) as pack:
+        (tmp / "manifest.json").write_text(json.dumps(pack.manifest), encoding="utf-8")
+        pack.extract_specs(tmp)
     return tmp / "files"
 
 

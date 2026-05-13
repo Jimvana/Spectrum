@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from spectrum_core import (
     SpectrumPack as CorePack,
+    decode_member,
     inspect_pack,
     pack as core_pack,
     unpack as core_unpack,
@@ -33,6 +34,8 @@ class DecodedDocument:
     path: str
     content: str
     content_bytes: bytes
+    id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SpectrumPack:
@@ -80,26 +83,40 @@ class SpectrumPack:
     ) -> "SpectrumPack":
         """Create a pack from in-memory documents.
 
-        Metadata is accepted now so callers can keep one object shape. The
-        current core pack manifest does not persist arbitrary metadata yet.
+        Document IDs and metadata are persisted in the pack manifest so callers
+        can recover provenance when documents are decoded later.
         """
         with tempfile.TemporaryDirectory(prefix="spectrum-sdk-docs-") as tmp_name:
             root = Path(tmp_name)
+            ids_by_source: dict[str, str] = {}
+            metadata_by_source: dict[str, dict[str, Any]] = {}
             wrote = 0
             for document in documents:
                 rel = Path(document.path or f"{document.id}.txt")
                 if rel.is_absolute() or ".." in rel.parts:
                     raise ValueError(f"unsafe document path: {rel}")
+                rel_posix = rel.as_posix()
                 target = root / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if isinstance(document.content, bytes):
                     target.write_bytes(document.content)
                 else:
                     target.write_text(document.content, encoding="utf-8", newline="")
+                ids_by_source[rel_posix] = document.id
+                if document.metadata:
+                    metadata_by_source[rel_posix] = dict(document.metadata)
                 wrote += 1
             if wrote == 0:
                 raise ValueError("at least one document is required")
-            core_pack(root, output_path, include_all=True, rle=rle, zlib_level=zlib_level)
+            core_pack(
+                root,
+                output_path,
+                include_all=True,
+                rle=rle,
+                zlib_level=zlib_level,
+                ids_by_source=ids_by_source,
+                metadata_by_source=metadata_by_source,
+            )
         return cls(output_path)
 
     def inspect(self) -> dict:
@@ -129,11 +146,33 @@ class SpectrumPack:
                     path=entry.source,
                     content=content_bytes.decode("utf-8", errors="replace"),
                     content_bytes=content_bytes,
+                    id=entry.source_id,
+                    metadata=entry.metadata or {},
                 )
             )
             if not result.ok:
                 raise ValueError(f"decoded document failed verification: {entry.source}")
         return decoded
+
+    def read_document(self, path: str) -> DecodedDocument:
+        """Decode one document from the pack without unpacking every entry."""
+        with CorePack.open(self.path) as opened:
+            entry = opened.find_entry(path)
+            if entry is None:
+                raise FileNotFoundError(path)
+        with tempfile.TemporaryDirectory(prefix="spectrum-sdk-read-") as tmp_name:
+            output = Path(tmp_name) / "document"
+            result = decode_member(self.path, path, output)
+            content_bytes = output.read_bytes()
+        if not result.ok:
+            raise ValueError(f"decoded document failed verification: {path}")
+        return DecodedDocument(
+            path=entry.source,
+            content=content_bytes.decode("utf-8", errors="replace"),
+            content_bytes=content_bytes,
+            id=entry.source_id,
+            metadata=entry.metadata or {},
+        )
 
     def extract_to(self, output_dir: str | Path) -> Path:
         target = Path(output_dir)

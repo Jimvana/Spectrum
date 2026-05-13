@@ -45,6 +45,15 @@ decoded = pack.unpack("./decoded")
 print(decoded[0].content)
 ```
 
+Decode one document without unpacking the full pack:
+
+```python
+document = pack.read_document("notes/memory.md")
+print(document.id)
+print(document.metadata)
+print(document.content)
+```
+
 Search:
 
 ```python

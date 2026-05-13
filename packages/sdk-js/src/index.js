@@ -6,7 +6,7 @@ const execFileAsync = promisify(execFile);
 export class SpectrumPack {
   constructor(path, options = {}) {
     this.path = path;
-    this.command = options.command || process.env.SPECTRUM_COMMAND || "spectrum-core";
+    this.command = options.command || process.env.SPECTRUM_COMMAND || "spectrum";
     this.baseArgs = options.baseArgs || [];
     this.env = options.env || process.env;
   }

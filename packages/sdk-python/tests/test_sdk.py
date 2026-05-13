@@ -38,7 +38,14 @@ def test_sdk_from_documents(tmp_path: Path) -> None:
     assert pack.inspect()["entries"] == 1
     decoded = pack.unpack(tmp_path / "decoded")
     assert decoded[0].path == "notes/memory.md"
+    assert decoded[0].id == "doc-1"
+    assert decoded[0].metadata == {"source": "test"}
     assert decoded[0].content == "James wants Spectrum to stay local-first.\n"
+
+    selected = pack.read_document("notes/memory.md")
+    assert selected.id == "doc-1"
+    assert selected.metadata == {"source": "test"}
+    assert selected.content == "James wants Spectrum to stay local-first.\n"
 
 
 def test_sdk_build_index_and_search(tmp_path: Path) -> None:

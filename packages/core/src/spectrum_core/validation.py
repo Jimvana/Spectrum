@@ -49,9 +49,9 @@ def verify_pack(pack_path: str | Path) -> ValidationReport:
     with tempfile.TemporaryDirectory(prefix="spectrum-core-verify-pack-") as tmp_name:
         tmp = Path(tmp_name)
         with SpectrumPack.open(pack_path) as opened:
-            opened._zip.extractall(tmp / "pack")
             for entry in opened.entries:
-                result = decode_file(tmp / "pack" / entry.spec, tmp / "decoded" / entry.source)
+                spec_path = opened.extract_spec(entry, tmp / "pack")
+                result = decode_file(spec_path, tmp / "decoded" / entry.source)
                 results.append((entry.source, result))
     return _report(results)
 
