@@ -1,9 +1,51 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from spectrum_cli.main import main
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_cli_help_does_not_import_image_dependencies() -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        str(path)
+        for path in [
+            ROOT / "packages/core/src",
+            ROOT / "packages/index/src",
+            ROOT / "packages/cli/src",
+        ]
+    )
+    code = """
+import importlib.abc
+import sys
+
+class BlockPIL(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "PIL" or fullname.startswith("PIL."):
+            raise ModuleNotFoundError("blocked PIL")
+        return None
+
+sys.meta_path.insert(0, BlockPIL())
+from spectrum_cli.main import main
+raise SystemExit(main(["--help"]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Spectrum Store Developer Preview" in result.stdout
 
 
 def test_cli_pack_inspect_unpack_verify(tmp_path: Path, capsys) -> None:

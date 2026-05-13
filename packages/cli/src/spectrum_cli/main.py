@@ -6,17 +6,6 @@ import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
-from spectrum_core import (
-    decode_file,
-    encode_file,
-    inspect_pack,
-    inspect_spec,
-    pack,
-    unpack,
-    verify_path,
-)
-from spectrum_index import build_index, search_pack
-
 
 def _json_default(value):
     if isinstance(value, Path):
@@ -34,6 +23,8 @@ def emit(value, *, as_json: bool) -> None:
 
 
 def command_encode(args: argparse.Namespace) -> int:
+    from spectrum_core import encode_file
+
     result = encode_file(
         args.input,
         args.output,
@@ -47,12 +38,16 @@ def command_encode(args: argparse.Namespace) -> int:
 
 
 def command_decode(args: argparse.Namespace) -> int:
+    from spectrum_core import decode_file
+
     result = decode_file(args.input, args.output, verbose=args.verbose)
     emit(result, as_json=args.json)
     return 0 if result.ok else 1
 
 
 def command_pack(args: argparse.Namespace) -> int:
+    from spectrum_core import pack
+
     summary = pack(
         args.input,
         args.output,
@@ -67,12 +62,16 @@ def command_pack(args: argparse.Namespace) -> int:
 
 
 def command_unpack(args: argparse.Namespace) -> int:
+    from spectrum_core import unpack
+
     results = unpack(args.input, args.output, verbose=args.verbose)
     emit(results, as_json=args.json)
     return 0 if all(result.ok for result in results) else 1
 
 
 def command_inspect(args: argparse.Namespace) -> int:
+    from spectrum_core import inspect_pack, inspect_spec
+
     path = Path(args.input)
     if path.suffix.lower() == ".specpack":
         emit(inspect_pack(path), as_json=args.json)
@@ -82,12 +81,16 @@ def command_inspect(args: argparse.Namespace) -> int:
 
 
 def command_verify(args: argparse.Namespace) -> int:
+    from spectrum_core import verify_path
+
     report = verify_path(args.input)
     emit(report.to_dict(), as_json=args.json)
     return 0 if report.valid else 1
 
 
 def command_index(args: argparse.Namespace) -> int:
+    from spectrum_index import build_index
+
     result = build_index(args.input, output_path=args.output, embed=args.embed, verbose=args.verbose)
     payload = {key: value for key, value in result.items() if key != "index"}
     emit(payload, as_json=args.json)
@@ -95,6 +98,8 @@ def command_index(args: argparse.Namespace) -> int:
 
 
 def command_search(args: argparse.Namespace) -> int:
+    from spectrum_index import search_pack
+
     results = search_pack(
         args.pack,
         args.query,
