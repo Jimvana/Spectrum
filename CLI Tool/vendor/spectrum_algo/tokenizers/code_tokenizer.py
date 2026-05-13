@@ -46,6 +46,26 @@ _SHELL_SCANNER = re.compile(r'''
 ''', re.VERBOSE | re.DOTALL)
 
 
+_POWERSHELL_SCANNER = re.compile(r'''
+    ( \#[^\n]*             )   # G1: comment
+  | ( \$\{[^}]*\}          )   # G2: braced variable
+  | ( \$_                  )   # G3: current pipeline item
+  | ( \$[A-Za-z_][A-Za-z0-9_:]* ) # G4: variable / scoped variable
+  | ( @"(?:.|\n)*?"@       )   # G5: double-quoted here-string
+  | ( @'(?:.|\n)*?'@       )   # G6: single-quoted here-string
+  | ( "(?:`.|[^"`])*"     )   # G7: double-quoted string
+  | ( '(?:''|[^'])*'       )   # G8: single-quoted string
+  | ( -[A-Za-z][A-Za-z0-9]* ) # G9: comparison/logical/operator token
+  | ( [A-Za-z][A-Za-z0-9]*-(?:[A-Za-z][A-Za-z0-9]*-?)* ) # G10: cmdlet
+  | ( \d+(?:\.\d+)?        )   # G11: number
+  | ( \|\||&&|::|=>|[|&;(){}\[\]<>=,.] ) # G12: operators/punctuation
+  | ( \n                   )   # G13: newline
+  | ( [ \t\r]+             )   # G14: horizontal whitespace
+  | ( [A-Za-z_][A-Za-z0-9_]* ) # G15: keyword / identifier
+  | ( .                    )   # G16: fallback char
+''', re.VERBOSE | re.DOTALL)
+
+
 _CONFIG_SCANNER = re.compile(r'''
     ( \#[^\n]*|//[^\n]*    )   # G1: comment
   | ( "(?:\\.|[^"\\])*"   )   # G2: double-quoted string
@@ -106,6 +126,22 @@ def tokenise_shell_like(source: str) -> list[str]:
         elif group in (7, 10):
             _emit_token_or_chars(value, tokens)
         elif group in (8, 9):
+            tokens.extend(value)
+        else:
+            tokens.append(value)
+    return tokens
+
+
+def tokenise_powershell_like(source: str) -> list[str]:
+    tokens: list[str] = []
+    for match in _POWERSHELL_SCANNER.finditer(source):
+        group = match.lastindex
+        value = match.group()
+        if group in (1, 2, 4, 5, 6, 7, 8, 11):
+            _emit_chars(value, tokens)
+        elif group in (3, 9, 10, 12, 15):
+            _emit_token_or_chars(value, tokens)
+        elif group in (13, 14):
             tokens.extend(value)
         else:
             tokens.append(value)

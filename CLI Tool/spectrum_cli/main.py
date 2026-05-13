@@ -52,6 +52,7 @@ from spec_format.spec_encoder import (
     LANGUAGE_JAVA,
     LANGUAGE_JSON,
     LANGUAGE_PHP,
+    LANGUAGE_POWERSHELL,
     LANGUAGE_PYTHON,
     LANGUAGE_RUST,
     LANGUAGE_SHELL,
@@ -69,7 +70,7 @@ from spec_format.spec_encoder import (
 )
 
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 PACK_VERSION = 1
 PACK_INDEX_NAME = "index.bin"
 PACK_COMPRESSION = zipfile.ZIP_STORED
@@ -104,6 +105,9 @@ SUPPORTED_EXTS = {
     ".sh",
     ".bash",
     ".zsh",
+    ".ps1",
+    ".psm1",
+    ".psd1",
     ".json",
     ".yaml",
     ".yml",
@@ -138,6 +142,11 @@ LANG_MAP = {
     "sh": LANGUAGE_SHELL,
     "shell": LANGUAGE_SHELL,
     "bash": LANGUAGE_SHELL,
+    "ps1": LANGUAGE_POWERSHELL,
+    "psm1": LANGUAGE_POWERSHELL,
+    "psd1": LANGUAGE_POWERSHELL,
+    "powershell": LANGUAGE_POWERSHELL,
+    "pwsh": LANGUAGE_POWERSHELL,
     "json": LANGUAGE_JSON,
     "yaml": LANGUAGE_YAML,
     "yml": LANGUAGE_YAML,
@@ -160,6 +169,7 @@ LANG_NAMES = {
     LANGUAGE_GO: "Go",
     LANGUAGE_CSHARP: "C#",
     LANGUAGE_SHELL: "Shell",
+    LANGUAGE_POWERSHELL: "PowerShell",
     LANGUAGE_JSON: "JSON",
     LANGUAGE_YAML: "YAML",
     LANGUAGE_TOML: "TOML",

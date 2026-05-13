@@ -114,7 +114,7 @@ Current dictionary support includes:
 * C / C++
 * Go
 * C#
-* shell
+* Shell / PowerShell
 * JSON / YAML / TOML
 * English text
 

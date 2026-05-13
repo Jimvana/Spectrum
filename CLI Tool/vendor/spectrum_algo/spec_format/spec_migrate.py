@@ -60,6 +60,18 @@ _LANG_TO_EXT_CANONICAL = {
     5: ".ts",
     6: ".sql",
     7: ".rs",
+    8: ".php",
+    9: ".xml",
+    10: ".java",
+    11: ".c",
+    12: ".cpp",
+    13: ".go",
+    14: ".cs",
+    15: ".sh",
+    16: ".json",
+    17: ".yaml",
+    18: ".toml",
+    19: ".ps1",
 }
 
 

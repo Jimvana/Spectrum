@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spectrum-index"
-version = "0.1.0"
+version = "0.1.1"
 description = "Retrieval indexing and BM25 search for Spectrum packs."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "spectrum-core==0.1.0",
+  "spectrum-core==0.1.1",
 ]
 
 [tool.setuptools.packages.find]

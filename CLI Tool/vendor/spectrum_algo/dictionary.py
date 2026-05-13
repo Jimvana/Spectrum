@@ -1,5 +1,5 @@
 """
-Spectrum Algo — Dictionary v12
+Spectrum Algo — Dictionary v13
 Colour ↔ Token mapping for the Spectrum encoding system.
 
 Design rules:
@@ -28,9 +28,11 @@ Design rules:
   - PHP keywords:  warm-sand family          R=245, B=80
   - PHP functions: warm-sand/light family    R=245, B=100
 
-Version: 12  (adds C, C++, Go, C#, shell, JSON, YAML, and TOML support.
+Version: 13  (expands Shell support and adds PowerShell support.
+              v12 added C, C++, Go, C#, shell, JSON, YAML, and TOML support.
               Covers Python, HTML, JS, TS, CSS, SQL, Rust, PHP, XML-compatible,
-              Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English text.)
+              Java, C, C++, Go, C#, Shell, PowerShell, JSON, YAML, TOML,
+              and English text.)
 
 RLE design:
   - R channel value 253 is reserved as the RLE marker
@@ -47,7 +49,7 @@ RLE design:
 # Version tag — encoded in the header pixel's alpha channel (if RGBA),
 # or as a dedicated header row in future versions.
 # ---------------------------------------------------------------------------
-DICT_VERSION = 12
+DICT_VERSION = 13
 
 # ---------------------------------------------------------------------------
 # Python keywords  →  RGB
@@ -1156,11 +1158,108 @@ SHELL_TOKENS = {
     "mv":      (235, 146, 80),
 }
 
+POWERSHELL_TOKENS = {
+    "workflow":             (233, 106, 90),
+    "dynamicparam":         (233, 122, 90),
+    "inlinescript":         (233, 130, 90),
+    "Get-ChildItem":        (233, 154, 90),
+    "Set-Location":         (233, 162, 90),
+    "Get-Content":          (233, 170, 90),
+    "Set-Content":          (233, 178, 90),
+    "Add-Content":          (233, 186, 90),
+    "Copy-Item":            (233, 194, 90),
+    "Move-Item":            (233, 202, 90),
+    "Remove-Item":          (233, 210, 90),
+    "New-Item":             (233, 218, 90),
+    "Test-Path":            (233, 226, 90),
+    "Select-String":        (233, 234, 90),
+    "Where-Object":         (233, 242, 90),
+    "ForEach-Object":       (233, 250, 90),
+    "Sort-Object":          (233,  50, 94),
+    "Group-Object":         (233,  58, 94),
+    "Select-Object":        (233,  66, 94),
+    "Measure-Object":       (233,  74, 94),
+    "Import-Module":        (233,  82, 94),
+    "Export-ModuleMember":  (233,  90, 94),
+    "Get-Command":          (233,  98, 94),
+    "Get-Help":             (233, 106, 94),
+    "Get-Process":          (233, 114, 94),
+    "Start-Process":        (233, 122, 94),
+    "Stop-Process":         (233, 130, 94),
+    "Get-Service":          (233, 138, 94),
+    "Start-Service":        (233, 146, 94),
+    "Stop-Service":         (233, 154, 94),
+    "Invoke-Command":       (233, 162, 94),
+    "Invoke-WebRequest":    (233, 170, 94),
+    "Invoke-RestMethod":    (233, 178, 94),
+    "ConvertTo-Json":       (233, 186, 94),
+    "ConvertFrom-Json":     (233, 194, 94),
+    "Write-Host":           (233, 202, 94),
+    "Write-Output":         (233, 210, 94),
+    "Write-Error":          (233, 218, 94),
+    "Write-Warning":        (233, 226, 94),
+    "Write-Verbose":        (233, 234, 94),
+    "Write-Debug":          (233, 242, 94),
+    "Read-Host":            (233, 250, 94),
+    "Out-File":             (233,  50, 98),
+    "Join-Path":            (233,  58, 98),
+    "Split-Path":           (233,  66, 98),
+    "Resolve-Path":         (233,  74, 98),
+    "Push-Location":        (233,  82, 98),
+    "Pop-Location":         (233,  90, 98),
+    "Get-Item":             (233,  98, 98),
+    "Get-ItemProperty":     (233, 106, 98),
+    "Set-ItemProperty":     (233, 114, 98),
+    "New-Object":           (233, 122, 98),
+    "Add-Type":             (233, 130, 98),
+    "Start-Job":            (233, 138, 98),
+    "Receive-Job":          (233, 146, 98),
+    "Wait-Job":             (233, 154, 98),
+    "Remove-Job":           (233, 162, 98),
+    "-eq":                  (233, 170, 98),
+    "-ne":                  (233, 178, 98),
+    "-gt":                  (233, 186, 98),
+    "-ge":                  (233, 194, 98),
+    "-lt":                  (233, 202, 98),
+    "-le":                  (233, 210, 98),
+    "-like":                (233, 218, 98),
+    "-notlike":             (233, 226, 98),
+    "-match":               (233, 234, 98),
+    "-notmatch":            (233, 242, 98),
+    "-contains":            (233, 250, 98),
+    "-notcontains":         (233,  50, 102),
+    "-in":                  (233,  58, 102),
+    "-notin":               (233,  66, 102),
+    "-and":                 (233,  74, 102),
+    "-or":                  (233,  82, 102),
+    "-not":                 (233,  90, 102),
+    "-xor":                 (233,  98, 102),
+    "$_":                   (233, 106, 102),
+    "$PSItem":              (233, 114, 102),
+    "$PSVersionTable":      (233, 122, 102),
+}
+
 CONFIG_TOKENS = {
     "dependencies":    (234,  50, 100),
     "devDependencies": (234,  58, 100),
     "scripts":         (234,  66, 100),
     "enabled":         (234,  74, 100),
+}
+
+SHELL_EXTRA_TOKENS = {
+    "mapfile": (235, 234, 80),
+    "dirs":    (235, 242, 80),
+    "pushd":   (235, 250, 80),
+    "popd":    (235,  50, 84),
+    "pwd":     (235,  58, 84),
+    "cd":      (235,  66, 84),
+    "ls":      (235,  74, 84),
+    "uniq":    (235, 114, 84),
+    "xargs":   (235, 130, 84),
+    "gzip":    (235, 154, 84),
+    "ssh":     (235, 162, 84),
+    "scp":     (235, 170, 84),
+    "sudo":    (235, 178, 84),
 }
 
 # ---------------------------------------------------------------------------
@@ -1281,6 +1380,8 @@ TOKEN_TO_RGB: dict[str, tuple[int, int, int]] = {
     **CSHARP_IDENTIFIERS,
     **SHELL_TOKENS,
     **CONFIG_TOKENS,
+    **SHELL_EXTRA_TOKENS,
+    **POWERSHELL_TOKENS,
 }
 
 # ---------------------------------------------------------------------------
@@ -1419,6 +1520,8 @@ if __name__ == "__main__":
     print(f"  Go keywords:       {len(GO_KEYWORDS)}")
     print(f"  C# identifiers:    {len(CSHARP_IDENTIFIERS)}")
     print(f"  Shell tokens:      {len(SHELL_TOKENS)}")
+    print(f"  Shell extra:       {len(SHELL_EXTRA_TOKENS)}")
+    print(f"  PowerShell tokens: {len(POWERSHELL_TOKENS)}")
     print(f"  Config tokens:     {len(CONFIG_TOKENS)}")
     print(f"\n  RGB space used:    {len(TOKEN_TO_RGB):,} / 16,777,216 "
           f"({100*len(TOKEN_TO_RGB)/16_777_216:.2f}%)")

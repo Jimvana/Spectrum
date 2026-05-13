@@ -45,6 +45,7 @@ from spec_format._frozen.v8 import SPEC_TOKEN_COUNT as _V8_COUNT
 from spec_format._frozen.v9 import SPEC_TOKEN_COUNT as _V9_COUNT
 from spec_format._frozen.v10 import SPEC_TOKEN_COUNT as _V10_COUNT
 from spec_format._frozen.v11 import SPEC_TOKEN_COUNT as _V11_COUNT
+from spec_format._frozen.v12 import SPEC_TOKEN_COUNT as _V12_COUNT
 
 VERSION_COUNTS: dict[int, int] = {
     7: _V7_COUNT,
@@ -52,6 +53,7 @@ VERSION_COUNTS: dict[int, int] = {
     9: _V9_COUNT,
     10: _V10_COUNT,
     11: _V11_COUNT,
+    12: _V12_COUNT,
 }
 
 # Minimum supported version for backward-compatible decoding

@@ -51,6 +51,7 @@ from spec_format.spec_encoder import (
     LANGUAGE_JAVA,
     LANGUAGE_JSON,
     LANGUAGE_PHP,
+    LANGUAGE_POWERSHELL,
     LANGUAGE_PYTHON,
     LANGUAGE_RUST,
     LANGUAGE_SHELL,
@@ -73,6 +74,7 @@ from tokenizers.html_tokenizer import tokenise_html
 from tokenizers.java_tokenizer import tokenise_java
 from tokenizers.js_tokenizer import tokenise_js
 from tokenizers.php_tokenizer import tokenise_php
+from tokenizers.powershell_tokenizer import tokenise_powershell
 from tokenizers.rust_tokenizer import tokenise_rust
 from tokenizers.shell_tokenizer import tokenise_shell
 from tokenizers.sql_tokenizer import tokenise_sql
@@ -115,6 +117,9 @@ LANG_BY_EXT = {
     ".sh": LANGUAGE_SHELL,
     ".bash": LANGUAGE_SHELL,
     ".zsh": LANGUAGE_SHELL,
+    ".ps1": LANGUAGE_POWERSHELL,
+    ".psm1": LANGUAGE_POWERSHELL,
+    ".psd1": LANGUAGE_POWERSHELL,
     ".json": LANGUAGE_JSON,
     ".yaml": LANGUAGE_YAML,
     ".yml": LANGUAGE_YAML,
@@ -137,6 +142,7 @@ LANG_NAMES = {
     LANGUAGE_GO: "go",
     LANGUAGE_CSHARP: "csharp",
     LANGUAGE_SHELL: "shell",
+    LANGUAGE_POWERSHELL: "powershell",
     LANGUAGE_JSON: "json",
     LANGUAGE_YAML: "yaml",
     LANGUAGE_TOML: "toml",
@@ -157,6 +163,7 @@ TOKENIZER_BY_LANG = {
     LANGUAGE_GO: tokenise_go,
     LANGUAGE_CSHARP: tokenise_csharp,
     LANGUAGE_SHELL: tokenise_shell,
+    LANGUAGE_POWERSHELL: tokenise_powershell,
     LANGUAGE_JSON: tokenise_config,
     LANGUAGE_YAML: tokenise_config,
     LANGUAGE_TOML: tokenise_config,

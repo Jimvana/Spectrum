@@ -54,6 +54,7 @@ LANGUAGE_NAMES = {
     16: "JSON",
     17: "YAML",
     18: "TOML",
+    19: "PowerShell",
 }
 
 PACK_INDEX_NAME = "spectrum_index.json"

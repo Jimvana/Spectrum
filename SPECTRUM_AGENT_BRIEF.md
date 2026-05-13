@@ -68,7 +68,7 @@ Unknown characters fall back to marker IDs, so the decoder can reconstruct the o
 
 ### Dictionary
 
-Spectrum uses a stable dictionary of meaningful language tokens. Current dictionary coverage includes Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML-compatible payloads, Java, C, C++, Go, C#, shell, JSON, YAML, TOML, and English text.
+Spectrum uses a stable dictionary of meaningful language tokens. Current dictionary coverage includes Python, HTML, JavaScript, TypeScript, CSS, SQL, Rust, PHP, XML-compatible payloads, Java, C, C++, Go, C#, Shell, PowerShell, JSON, YAML, TOML, and English text.
 
 The dictionary gives Spectrum a semantic-token layer instead of compressing only arbitrary bytes.
 
