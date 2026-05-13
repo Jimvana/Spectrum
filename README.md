@@ -53,15 +53,17 @@ and current codec runtime so users do not need to set `PYTHONPATH` or
 
 ## Spectrum Benchmark HUD
 
-The repository includes a local Benchmark HUD for visually comparing Spectrum
-against common retrieval baselines on real code corpora. It streams live build,
-size, latency, recall, and MRR events for:
+The repository includes a local **Spectrum CodeRAG Benchmark HUD** for visually
+comparing repo-level code retrieval against common RAG baselines on real code
+corpora. It streams live build, storage density, latency, context quality,
+recall, MRR, deterministic reconstruction, and Spectrum debug events for:
 
-* Spectrum SPB,
-* TF-IDF,
+* Spectrum CodeRAG,
+* FAISS Flat,
 * raw BM25,
-* dense vectors,
-* and FAISS Flat when available.
+* TF-IDF,
+* Chroma when available,
+* and hybrid sparse+dense retrieval.
 
 Run it from the repository root on Windows:
 
@@ -85,8 +87,14 @@ http://127.0.0.1:8765
 Use `Small`, `Medium`, or `Large` for built-in corpora, or choose `My own repo`
 and enter a public GitHub repository as `owner/name` or
 `https://github.com/owner/name`. Custom repo runs clone the repository into that
-run's local artifact folder and benchmark it with the same engines. Generated
+run's local artifact folder and benchmark it with the same engines. The HUD can
+export a completed run as JSON, including the repository name, resolved CodeRAG
+configuration, engine metrics, and Spectrum low-rank/miss debug trace. Generated
 run artifacts are written under `benchmark_hud/runs/` and are ignored by Git.
+
+The HUD currently uses `retrieval_mode: "coderag"` for Spectrum. The
+`Fast`/`Balanced`/`Accurate` buttons switch the CodeRAG rerank depth and scoring
+profile, not the generic Spectrum codec or index format.
 
 The project explores a simple idea:
 
@@ -302,13 +310,47 @@ Use `spectrum` for the public CLI command. The older `spec` command remains avai
 
 ---
 
-## Code Reranking Profiles
+## Spectrum CodeRAG Mode
 
-Code search can run Spectrum BM25 first, then rerank a bounded candidate set
-with code-aware sidecar signals: path parts, filename parts, identifiers,
-function/class/export/import names, and cheap proximity matches.
+Spectrum CodeRAG is the repo-aware retrieval mode used by the Benchmark HUD for
+code assistant tasks. It is deliberately separate from generic Spectrum
+retrieval. CodeRAG adds ranking signals that make sense for repositories:
 
-The production benchmark exposes this with `--spectrum-rerank`:
+* exact filename and path-stem matches,
+* source/config/doc path intent,
+* dotfile and package/plugin manifest handling,
+* environment disambiguation such as production vs staging and lite vs full,
+* root config preference over nested config when the query does not ask for a
+  nested app path,
+* penalties for generic docs, benchmark files, advisory folders, and sibling
+  files that match broad identifiers while missing the most specific query term,
+* deterministic tie-breaks using exact filename/stem, path specificity, fewer
+  extra filename terms, and shallower paths.
+
+These are **not** global Spectrum retrieval defaults. Base Spectrum serving can
+still use a neutral `CodeRerankProfile(mode="base")`, while CodeRAG uses
+`coderag_rerank_profile(...)`. This keeps future document, memory, archive, or
+general text retrieval tuning isolated from repo-specific CodeRAG heuristics.
+
+User-facing switching is partial today:
+
+* The Benchmark HUD switches CodeRAG quality profiles with
+  `Fast` / `Balanced` / `Accurate`.
+* The HUD does not yet expose a generic `base` vs `coderag` mode selector; it is
+  intentionally a CodeRAG benchmark surface.
+* Programmatic callers can choose the profile object they pass into
+  `SpectrumServingRetriever`: neutral base profile or CodeRAG profile.
+
+---
+
+## CodeRAG Reranking Profiles
+
+CodeRAG runs Spectrum BM25 first, then reranks a bounded candidate set with
+repo-aware sidecar signals: path parts, filename parts, identifiers,
+function/class/export/import names, environment/config/doc cues, and cheap
+proximity matches.
+
+The production benchmark currently exposes this with `--spectrum-rerank`:
 
 | Profile | Candidate rerank depth | Intended use |
 |---|---:|---|
