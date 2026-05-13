@@ -1,5 +1,6 @@
 const state = {
   preset: "small",
+  profile: "accurate",
   repoUrl: "",
   source: null,
   events: 0,
@@ -13,8 +14,9 @@ const colors = {
   spectrum: "#00f6ff",
   tfidf: "#54ff8d",
   raw_bm25: "#ffd84d",
-  dense_vector: "#b65cff",
   faiss: "#ff8b34",
+  chroma: "#b65cff",
+  hybrid: "#ff4274",
 };
 
 const els = {
@@ -32,13 +34,16 @@ const els = {
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   presetGroup: document.getElementById("presetGroup"),
+  profileGroup: document.getElementById("profileGroup"),
   modal: document.getElementById("summaryModal"),
   summaryBody: document.getElementById("summaryBody"),
+  exportSummary: document.getElementById("exportSummary"),
   closeModal: document.getElementById("closeModal"),
   charts: {
     size: document.getElementById("sizeChart"),
     speed: document.getElementById("speedChart"),
     accuracy: document.getElementById("accuracyChart"),
+    reconstruct: document.getElementById("reconstructChart"),
   },
 };
 
@@ -72,6 +77,10 @@ function speedScore(ms) {
 
 function accuracyScore(mrr) {
   return clamp((mrr || 0) * 100, 0, 100);
+}
+
+function reconstructionScore(rate) {
+  return clamp((rate || 0) * 100, 0, 100);
 }
 
 function addEvent(label, detail = "") {
@@ -111,9 +120,10 @@ function makeEnginePanel(engine) {
       <span class="engine-status">queued</span>
     </div>
     <div class="gauge-stack">
-      ${gaugeMarkup("size", "Size", "-", "store bytes", colors[engine.key] || "#00f6ff")}
+      ${gaugeMarkup("size", "Density", "-", "store bytes", colors[engine.key] || "#00f6ff")}
       ${gaugeMarkup("speed", "Speed", "-", "avg query ms", "#54ff8d")}
-      ${gaugeMarkup("accuracy", "Accuracy", "-", "MRR", "#ffd84d")}
+      ${gaugeMarkup("accuracy", "Context", "-", "MRR", "#ffd84d")}
+      ${gaugeMarkup("reconstruct", "Rebuild", "-", "deterministic", "#ecfbff")}
     </div>
     <canvas class="spark" height="42"></canvas>
     <div class="last-query">waiting for events</div>
@@ -166,6 +176,10 @@ function updateEnginePanel(key, payload) {
   if (metrics.mrr !== undefined) {
     setGauge(panel, "accuracy", accuracyScore(metrics.mrr), metrics.mrr.toFixed(3), `hit1 ${(metrics.hit1 * 100).toFixed(1)}%`);
   }
+  if (metrics.reconstruction_rate != null || payload.reconstruction_rate != null) {
+    const rate = metrics.reconstruction_rate ?? payload.reconstruction_rate;
+    setGauge(panel, "reconstruct", reconstructionScore(rate), `${(rate * 100).toFixed(0)}%`, rate >= 1 ? "exact rebuild" : "index only");
+  }
   if (payload.last) {
     panel.querySelector(".last-query").textContent = `${payload.last.query} -> ${payload.last.rank ? `rank ${payload.last.rank}` : "miss"}`;
   }
@@ -183,13 +197,14 @@ function handleRunStart(data) {
     state.history.set(engine.key, []);
     makeEnginePanel(engine);
   });
-  addEvent("RUN", `${data.preset_label} corpus from ${data.run_dir}`);
+  addEvent("RUN", `${data.preset_label} corpus / Spectrum ${data.spectrum_profile_label} from ${data.run_dir}`);
 }
 
 function handleBuilt(data) {
   updateEnginePanel(data.engine, {
     status: data.status,
     size_bytes: data.size_bytes,
+    reconstruction_rate: data.reconstruction_rate,
     running: data.status === "ok",
   });
   const note = data.status === "ok"
@@ -257,8 +272,9 @@ function startRun() {
   resetRun();
   const queries = encodeURIComponent(els.queryCount.value);
   const preset = encodeURIComponent(state.preset);
+  const profile = encodeURIComponent(state.profile);
   const repo = state.preset === "custom" ? `&repo=${encodeURIComponent(state.repoUrl)}` : "";
-  state.source = new EventSource(`/events?preset=${preset}&queries=${queries}&top_k=5${repo}`);
+  state.source = new EventSource(`/events?preset=${preset}&queries=${queries}&top_k=5&profile=${profile}${repo}`);
   const handlers = {
     phase: (data) => {
       els.phaseLabel.textContent = data.message.toUpperCase();
@@ -348,6 +364,7 @@ function drawAllCharts() {
   drawBars(els.charts.size, latestRows(), "size", "lower");
   drawBars(els.charts.speed, latestRows(), "avg_ms", "lower");
   drawBars(els.charts.accuracy, latestRows(), "mrr", "higher");
+  drawBars(els.charts.reconstruct, latestRows(), "reconstruction_rate", "higher");
 }
 
 function drawBars(canvas, rows, field, direction) {
@@ -391,7 +408,7 @@ function drawBars(canvas, rows, field, direction) {
     ctx.fillStyle = "#ecfbff";
     ctx.font = "10px Consolas, monospace";
     ctx.textAlign = "center";
-    const label = field === "size" ? `${value.toFixed(2)}x` : value.toFixed(3);
+    const label = field === "size" ? `${value.toFixed(2)}x` : field === "reconstruction_rate" ? `${(value * 100).toFixed(0)}%` : value.toFixed(3);
     ctx.fillText(label, x + barWidth / 2, Math.max(12, y - 5));
     ctx.fillStyle = "#86a0a7";
     ctx.fillText(row.label.slice(0, 10), x + barWidth / 2, height - 7);
@@ -401,6 +418,10 @@ function drawBars(canvas, rows, field, direction) {
 function openSummary(data) {
   const okRows = data.results.filter((row) => row.status === "ok");
   const skipped = data.results.filter((row) => row.status !== "ok");
+  const spectrumDebug = data.spectrum_debug || {};
+  const debugSummary = spectrumDebug.failure_count
+    ? `${spectrumDebug.failure_count} Spectrum debug cases: ${spectrumDebug.miss_count || 0} misses, ${spectrumDebug.low_rank_count || 0} low-rank`
+    : "No Spectrum misses or low-rank cases";
   const tableRows = data.results.map((row) => `
     <tr>
       <td>${row.label}</td>
@@ -410,14 +431,23 @@ function openSummary(data) {
       <td>${row.avg_ms !== undefined ? row.avg_ms.toFixed(4) : "-"}</td>
       <td>${row.p95_ms !== undefined ? row.p95_ms.toFixed(4) : "-"}</td>
       <td>${row.mrr !== undefined ? row.mrr.toFixed(4) : "-"}</td>
+      <td>${row.reconstruction_rate != null ? (row.reconstruction_rate * 100).toFixed(0) + "%" : "-"}</td>
       <td>${row.recall !== undefined ? (row.recall * 100).toFixed(1) + "%" : row.error || "-"}</td>
     </tr>
   `).join("");
   els.summaryBody.innerHTML = `
+    <div class="export-meta">
+      <strong>${data.repo_name || data.preset_label || "Benchmark corpus"}</strong>
+      <span>${data.corpus.files} files / ${data.corpus.docs} docs / ${data.query_count || "-"} queries</span>
+    </div>
+    <div class="debug-meta">
+      <strong>Spectrum debug</strong>
+      <span>${debugSummary}${spectrumDebug.artifact ? ` / ${spectrumDebug.artifact}` : ""}</span>
+    </div>
     <table class="summary-table">
       <thead>
         <tr>
-          <th>Engine</th><th>Status</th><th>Size</th><th>Ratio</th><th>Avg ms</th><th>P95 ms</th><th>MRR</th><th>Recall</th>
+          <th>Engine</th><th>Status</th><th>Size</th><th>Ratio</th><th>Avg ms</th><th>P95 ms</th><th>MRR</th><th>Rebuild</th><th>Recall</th>
         </tr>
       </thead>
       <tbody>${tableRows}</tbody>
@@ -425,7 +455,8 @@ function openSummary(data) {
     <div class="summary-grid">
       <div class="panel"><div class="panel-head"><span>SIZE</span><strong>STORE / RAW</strong></div><canvas id="modalSize" height="210"></canvas></div>
       <div class="panel"><div class="panel-head"><span>SPEED</span><strong>AVG MS</strong></div><canvas id="modalSpeed" height="210"></canvas></div>
-      <div class="panel"><div class="panel-head"><span>ACCURACY</span><strong>MRR</strong></div><canvas id="modalAccuracy" height="210"></canvas></div>
+      <div class="panel"><div class="panel-head"><span>CONTEXT</span><strong>MRR</strong></div><canvas id="modalAccuracy" height="210"></canvas></div>
+      <div class="panel"><div class="panel-head"><span>REBUILD</span><strong>DETERMINISTIC</strong></div><canvas id="modalReconstruct" height="210"></canvas></div>
     </div>
     ${skipped.length ? `<p class="last-query">${skipped.map((row) => `${row.label}: ${row.error}`).join(" | ")}</p>` : ""}
   `;
@@ -435,7 +466,32 @@ function openSummary(data) {
     drawBars(document.getElementById("modalSize"), okRows.map((row) => ({ key: row.engine, ...row })), "size", "lower");
     drawBars(document.getElementById("modalSpeed"), okRows.map((row) => ({ key: row.engine, ...row })), "avg_ms", "lower");
     drawBars(document.getElementById("modalAccuracy"), okRows.map((row) => ({ key: row.engine, ...row })), "mrr", "higher");
+    drawBars(document.getElementById("modalReconstruct"), okRows.map((row) => ({ key: row.engine, ...row })), "reconstruction_rate", "higher");
   });
+}
+
+function exportSummary() {
+  if (!state.final) return;
+  const repoName = state.final.repo_name || state.final.source || state.final.preset || "benchmark";
+  const safeRepo = repoName.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "benchmark";
+  const payload = {
+    exported_at: new Date().toISOString(),
+    benchmark: "Spectrum CodeRAG Benchmark",
+    repo_name: repoName,
+    spectrum_config: state.final.spectrum_config || null,
+    spectrum_debug: state.final.spectrum_debug || null,
+    ...state.final,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${safeRepo}-${state.final.run_id || "result"}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  addEvent("EXPORT", link.download);
 }
 
 function closeSummary() {
@@ -461,8 +517,16 @@ els.presetGroup.addEventListener("click", (event) => {
   }
 });
 
+els.profileGroup.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-profile]");
+  if (!button) return;
+  state.profile = button.dataset.profile;
+  [...els.profileGroup.querySelectorAll("button")].forEach((item) => item.classList.toggle("active", item === button));
+});
+
 els.startBtn.addEventListener("click", startRun);
 els.stopBtn.addEventListener("click", stopRun);
+els.exportSummary.addEventListener("click", exportSummary);
 els.closeModal.addEventListener("click", closeSummary);
 els.modal.addEventListener("click", (event) => {
   if (event.target === els.modal) closeSummary();

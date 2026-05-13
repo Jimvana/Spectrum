@@ -123,6 +123,7 @@ h2 {
 .status-bank span,
 .panel-head span,
 .repo-control span,
+.profile-control span,
 .query-control span {
   display: block;
   color: var(--muted);
@@ -141,16 +142,25 @@ h2 {
 }
 
 .control-row {
-  grid-template-columns: auto minmax(260px, 0.7fr) minmax(220px, 360px) auto auto;
+  grid-template-columns: auto minmax(260px, 0.7fr) auto minmax(220px, 360px) auto auto;
   align-items: center;
   margin-bottom: 12px;
   padding: 10px;
 }
 
-.preset-group {
+.preset-group,
+.profile-group {
   display: grid;
-  grid-template-columns: repeat(4, minmax(74px, 1fr));
   gap: 7px;
+}
+
+.preset-group {
+  grid-template-columns: repeat(4, minmax(74px, 1fr));
+}
+
+.profile-group {
+  grid-template-columns: repeat(3, minmax(82px, 1fr));
+  margin-top: 4px;
 }
 
 button,
@@ -201,6 +211,10 @@ button.active,
   gap: 10px;
 }
 
+.profile-control {
+  min-width: 268px;
+}
+
 .repo-control.visible {
   display: grid;
 }
@@ -234,7 +248,7 @@ button.active,
 }
 
 .chart-row {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 12px;
 }
 
@@ -266,7 +280,7 @@ button.active,
 
 .engine-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(180px, 1fr));
+  grid-template-columns: repeat(6, minmax(170px, 1fr));
   gap: 9px;
 }
 
@@ -449,6 +463,12 @@ canvas {
   padding: 14px;
 }
 
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .icon-command {
   width: 36px;
   height: 36px;
@@ -461,6 +481,47 @@ canvas {
   max-height: calc(100vh - 160px);
   overflow: auto;
   padding: 14px;
+}
+
+.export-meta,
+.debug-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(110, 244, 255, 0.18);
+  padding: 9px 10px;
+  background: rgba(0, 246, 255, 0.05);
+}
+
+.debug-meta {
+  border-color: rgba(255, 216, 77, 0.22);
+  background: rgba(255, 216, 77, 0.06);
+}
+
+.export-meta strong,
+.export-meta span,
+.debug-meta strong,
+.debug-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-meta strong,
+.debug-meta strong {
+  color: var(--green);
+}
+
+.debug-meta strong {
+  color: var(--yellow);
+}
+
+.export-meta span,
+.debug-meta span {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .summary-table {
@@ -484,7 +545,7 @@ canvas {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
