@@ -3,7 +3,8 @@
 Spectrum is a local-first way to turn a codebase into a compact, lossless,
 searchable `.specpack` that can be queried and restored byte-for-byte.
 
-The developer preview ships first as an npm-installed CLI:
+The developer preview ships first as an npm-installed CLI. The current public
+preview is `spectrumstore@0.1.0-preview.2`:
 
 ```powershell
 npm install -g spectrumstore
@@ -53,6 +54,12 @@ Install from npm:
 ```powershell
 npm install -g spectrumstore
 spectrum doctor
+```
+
+To pin the preview channel explicitly:
+
+```powershell
+npm install -g spectrumstore@preview
 ```
 
 Install from a local checkout while developing Spectrum itself:
