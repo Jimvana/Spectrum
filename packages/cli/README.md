@@ -1,7 +1,7 @@
 # Spectrum Store CLI
 
-CLI owns the developer-facing Spectrum Store preview commands: `pack`,
-`search`, `decode`, `verify`, `inspect`, `index`, and `unpack`.
+CLI owns the developer-facing Spectrum Store preview commands: `doctor`,
+`pack`, `search`, `decode`, `verify`, `inspect`, `index`, and `unpack`.
 
 The first ecosystem CLI package wraps `spectrum_core` for local format workflows:
 
@@ -13,11 +13,14 @@ The first ecosystem CLI package wraps `spectrum_core` for local format workflows
 - `verify` - verify `.spec`, `.spec` directory, or `.specpack` fidelity.
 - `index` - build a retrieval index.
 - `search` - search a `.specpack`.
+- `doctor` - check the local install, Python runtime, imports, bundled runtime,
+  and temporary write access.
 
 Example:
 
 ```powershell
-npm install -g . --force
+npm install -g spectrumstore
+spectrum doctor
 spectrum pack ./docs ./docs.specpack --json
 spectrum verify ./docs.specpack --json
 spectrum index ./docs.specpack --embed --json

@@ -1,6 +1,25 @@
 # Spectrum
 
-Spectrum is a deterministic retrieval-aware encoding layer for compact, lossless, searchable code and text stores.
+Spectrum is a local-first way to turn a codebase into a compact, lossless,
+searchable `.specpack` that can be queried and restored byte-for-byte.
+
+The developer preview ships first as an npm-installed CLI:
+
+```powershell
+npm install -g spectrumstore
+spectrum doctor
+spectrum pack ./my-repo ./my-repo.specpack --json
+spectrum search ./my-repo.specpack "authentication middleware" --top 5 --json
+spectrum verify ./my-repo.specpack --json
+```
+
+Use it when you want local, exact, searchable codebase packs for agents, RAG
+tools, and retrieval workflows without keeping raw chunks and a separate search
+store as the only source of truth.
+
+See the [5-minute quickstart](docs/quickstart.md), the
+[comparison guide](docs/why-spectrum.md), and the
+[release checklist](RELEASE_CHECKLIST.md).
 
 ## Spectrum Benchmark Demo
 
@@ -29,7 +48,14 @@ The first turnkey product surface is **Spectrum Store Developer Preview**: a
 local-first command line tool for creating compact, lossless, searchable
 `.specpack` stores from folders of code or text.
 
-Install from a local checkout:
+Install from npm:
+
+```powershell
+npm install -g spectrumstore
+spectrum doctor
+```
+
+Install from a local checkout while developing Spectrum itself:
 
 ```powershell
 npm install -g . --force
@@ -224,9 +250,11 @@ The full ecosystem plan is tracked in `docs/ecosystem_architecture.md`. The
 developer manual for the SDKs, CLI, HTTP API, and RAG workflows is
 `ECOSYSTEM_MANUAL.md`.
 
-## Try The Demo
+## Try The Legacy Benchmark Demo
 
-Install or update the local CLI from this checkout:
+The published `spectrumstore` preview focuses on `pack`, `search`, `verify`,
+and `unpack`. The older guided benchmark demo still runs from the legacy CLI in
+this checkout:
 
 ```powershell
 cd "CLI Tool"

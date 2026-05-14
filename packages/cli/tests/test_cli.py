@@ -48,6 +48,16 @@ raise SystemExit(main(["--help"]))
     assert "Spectrum Store Developer Preview" in result.stdout
 
 
+def test_cli_doctor_reports_install_health(capsys) -> None:
+    assert main(["doctor", "--json"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"]
+    check_names = {check["name"] for check in output["checks"]}
+    assert "python" in check_names
+    assert "spectrum-runtime" in check_names
+    assert "temp-write" in check_names
+
+
 def test_cli_pack_inspect_unpack_verify(tmp_path: Path, capsys) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
+import platform
+import tempfile
 import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -112,6 +116,131 @@ def command_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _doctor_check(name: str, ok: bool, detail: str, fix: str | None = None) -> dict[str, object]:
+    payload: dict[str, object] = {"name": name, "ok": ok, "detail": detail}
+    if fix:
+        payload["fix"] = fix
+    return payload
+
+
+def _find_spectrum_root() -> Path | None:
+    candidates: list[Path] = []
+    env_root = os.environ.get("SPECTRUM_REPO_ROOT")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    here = Path(__file__).resolve()
+    candidates.extend([here, *here.parents, Path.cwd(), *Path.cwd().parents])
+
+    for candidate in candidates:
+        if candidate.is_file():
+            candidate = candidate.parent
+        if (candidate / "dictionary.py").exists() and (candidate / "spec_format" / "spec_encoder.py").exists():
+            return candidate.resolve()
+    return None
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    checks: list[dict[str, object]] = []
+
+    python_version = ".".join(str(part) for part in sys.version_info[:3])
+    checks.append(
+        _doctor_check(
+            "python",
+            sys.version_info >= (3, 10),
+            f"{python_version} at {sys.executable}",
+            "Install Python 3.10+ and make sure it is available on PATH.",
+        )
+    )
+
+    node_command = os.environ.get("SPECTRUM_NODE_COMMAND")
+    if node_command:
+        checks.append(_doctor_check("node-wrapper", True, node_command))
+    else:
+        checks.append(
+            _doctor_check(
+                "node-wrapper",
+                True,
+                "not running through the npm wrapper",
+            )
+        )
+
+    for module_name in ["spectrum_core", "spectrum_index", "spectrum_cli"]:
+        spec = importlib.util.find_spec(module_name)
+        checks.append(
+            _doctor_check(
+                f"import:{module_name}",
+                spec is not None,
+                str(spec.origin) if spec and spec.origin else "not found",
+                "Reinstall the package or run from a checkout with the package sources on PYTHONPATH.",
+            )
+        )
+
+    spectrum_root = _find_spectrum_root()
+    checks.append(
+        _doctor_check(
+            "spectrum-runtime",
+            spectrum_root is not None,
+            str(spectrum_root) if spectrum_root else "not found",
+            "Reinstall spectrumstore, or set SPECTRUM_REPO_ROOT to the bundled runtime directory.",
+        )
+    )
+    if spectrum_root:
+        for relative in [
+            "dictionary.py",
+            "english_tokens.py",
+            "spec_format/spec_encoder.py",
+            "spec_format/spec_decoder.py",
+        ]:
+            path = spectrum_root / relative
+            checks.append(
+                _doctor_check(
+                    f"runtime-file:{relative}",
+                    path.exists(),
+                    str(path),
+                    "Reinstall spectrumstore; the bundled runtime is incomplete.",
+                )
+            )
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="spectrum-doctor-") as tmp:
+            probe = Path(tmp) / "write-probe.txt"
+            probe.write_text("ok", encoding="utf-8")
+            ok = probe.read_text(encoding="utf-8") == "ok"
+            checks.append(_doctor_check("temp-write", ok, str(probe.parent)))
+    except OSError as exc:
+        checks.append(
+            _doctor_check(
+                "temp-write",
+                False,
+                str(exc),
+                "Check permissions for your system temporary directory.",
+            )
+        )
+
+    payload = {
+        "ok": all(bool(check["ok"]) for check in checks),
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+        },
+        "checks": checks,
+    }
+
+    if args.json:
+        emit(payload, as_json=True)
+    else:
+        status = "ok" if payload["ok"] else "failed"
+        print(f"Spectrum doctor: {status}")
+        for check in checks:
+            marker = "ok" if check["ok"] else "fail"
+            print(f"[{marker}] {check['name']}: {check['detail']}")
+            if not check["ok"] and "fix" in check:
+                print(f"      fix: {check['fix']}")
+
+    return 0 if payload["ok"] else 1
+
+
 def add_common_codec_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", help="Force a language instead of extension detection")
     parser.add_argument("--rle", default="off", choices=["off", "auto", "force"], help="RLE mode")
@@ -181,6 +310,10 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--no-build", action="store_true", help="Fail if no index is available")
     search.add_argument("--json", action="store_true")
     search.set_defaults(func=command_search)
+
+    doctor = sub.add_parser("doctor", help="Check local runtime and bundled install health")
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(func=command_doctor)
 
     return parser
 

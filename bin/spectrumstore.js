@@ -12,6 +12,8 @@ const pythonPaths = [
 
 const env = {
   ...process.env,
+  SPECTRUM_NODE_COMMAND: process.execPath,
+  SPECTRUM_PACKAGE_ROOT: root,
   SPECTRUM_REPO_ROOT: process.env.SPECTRUM_REPO_ROOT || join(root, "CLI Tool", "vendor", "spectrum_algo"),
   PYTHONPATH: [
     ...pythonPaths,
