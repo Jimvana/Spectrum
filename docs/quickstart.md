@@ -1,7 +1,7 @@
 # Spectrum Store 5-Minute Quickstart
 
 This quickstart creates a compact, lossless, searchable `.specpack` from a
-small codebase and verifies that Spectrum can restore the original files.
+small codebase and serves it through Spectrum's local HTTP API.
 
 ## Requirements
 
@@ -12,13 +12,49 @@ small codebase and verifies that Spectrum can restore the original files.
 
 ```powershell
 npm install -g spectrumstore
+```
+
+## Turn The Key
+
+Run the guided loader:
+
+```powershell
+spectrum load
+```
+
+It will:
+
+- check the npm wrapper, Python runtime, bundled files, import paths, and temp
+  write access,
+- ask which repo or folder to pack,
+- write a `.specpack`,
+- start the local API at `http://127.0.0.1:7777`.
+
+For a non-interactive run:
+
+```powershell
+spectrum load ./my-repo ./my-repo.specpack --yes
+```
+
+If you type an output path without `.specpack`, Spectrum appends it:
+
+```powershell
+spectrum load ./my-repo ./my-repo --yes
+```
+
+That writes `./my-repo.specpack`.
+
+## Manual Workflow
+
+Use this when you want each step visible.
+
+First check the install:
+
+```powershell
 spectrum doctor
 ```
 
-`spectrum doctor` checks the npm wrapper, Python runtime, bundled Spectrum
-runtime files, import paths, and temporary write access.
-
-## Pack A Codebase
+Then pack a codebase.
 
 Use your own repository:
 
@@ -30,6 +66,19 @@ From a Spectrum checkout, you can use the tiny sample service:
 
 ```powershell
 spectrum pack ./demo/sample-code/auth-service ./auth-service.specpack --json
+```
+
+## Serve It
+
+```powershell
+spectrum serve ./auth-service.specpack --port 7777
+```
+
+The positional pack is registered as `repo`. In another terminal:
+
+```powershell
+curl http://127.0.0.1:7777/health
+curl http://127.0.0.1:7777/packs
 ```
 
 ## Search It
@@ -65,6 +114,6 @@ spectrum unpack ./auth-service.specpack ./restored-auth-service --json
 
 ## Current Preview Scope
 
-The preview is intentionally CLI-first. The SDKs, server, dashboard, memory
-layer, and connectors are developing around the same `.specpack` foundation, but
-the supported installation path for new users is the `spectrumstore` npm CLI.
+The supported preview path is the `spectrumstore` npm CLI plus the local
+Spectrum HTTP API. SDKs, dashboard, memory layer, and integrations are
+developing around the same `.specpack` foundation.

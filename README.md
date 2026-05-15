@@ -3,15 +3,39 @@
 Spectrum is a local-first way to turn a codebase into a compact, lossless,
 searchable `.specpack` that can be queried and restored byte-for-byte.
 
-The developer preview ships first as an npm-installed CLI. The current public
-preview is `spectrumstore@0.1.0-preview.2`:
+The developer preview ships first as an npm-installed CLI. The current preview
+is `spectrumstore@0.1.0-preview.4`.
+
+## Turn The Key
+
+Install Spectrum, point it at a repo, and let the guided loader do the rest:
 
 ```powershell
 npm install -g spectrumstore
-spectrum doctor
-spectrum pack ./my-repo ./my-repo.specpack --json
-spectrum search ./my-repo.specpack "authentication middleware" --top 5 --json
-spectrum verify ./my-repo.specpack --json
+spectrum load
+```
+
+`spectrum load` walks you through the complete local path: it checks the
+install, packs your repo into a compact `.specpack`, then starts the local HTTP
+API so an agent, app, or retrieval workflow can search and hydrate exact source.
+
+Prefer copy/paste commands instead of prompts:
+
+```powershell
+spectrum load ./my-repo ./my-repo.specpack --yes
+```
+
+After it starts, your pack is available locally:
+
+```text
+http://127.0.0.1:7777
+```
+
+Useful checks:
+
+```powershell
+curl http://127.0.0.1:7777/health
+curl http://127.0.0.1:7777/packs
 ```
 
 Use it when you want local, exact, searchable codebase packs for agents, RAG
@@ -68,10 +92,22 @@ Install from a local checkout while developing Spectrum itself:
 npm install -g . --force
 ```
 
-Then run the core workflow:
+Then run the guided workflow:
+
+```powershell
+spectrum load ./docs ./docs.specpack --yes
+```
+
+Or run the core workflow manually:
 
 ```powershell
 spectrum pack ./docs ./docs.specpack --json
+spectrum serve ./docs.specpack --port 7777
+```
+
+Additional diagnostics:
+
+```powershell
 spectrum verify ./docs.specpack --json
 spectrum index ./docs.specpack --embed --json
 spectrum search ./docs.specpack "authentication middleware" --top 5 --json

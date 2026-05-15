@@ -1,6 +1,6 @@
 {
   "name": "spectrumstore",
-  "version": "0.1.0-preview.3",
+  "version": "0.1.0-preview.4",
   "description": "Spectrum Store Developer Preview: local-first lossless searchable .specpack stores.",
   "scripts": {
     "test": "python scripts/test.py",
