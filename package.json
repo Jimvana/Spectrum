@@ -17,6 +17,7 @@
     "packages/core/src/**/*.py",
     "packages/index/src/**/*.py",
     "packages/cli/src/**/*.py",
+    "packages/server/src/**/*.py",
     "CLI Tool/vendor/spectrum_algo/**/*.py",
     "README.md",
     "CHANGELOG.md",
@@ -26,5 +27,8 @@
     "node": ">=18"
   },
   "license": "SEE LICENSE IN LICENSE",
-  "private": false
+  "private": false,
+  "dependencies": {
+    "chalk": "^5.6.2"
+  }
 }

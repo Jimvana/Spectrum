@@ -101,3 +101,51 @@ def test_cli_index_and_search(tmp_path: Path, capsys) -> None:
     search_output = json.loads(capsys.readouterr().out)
     assert search_output[0]["path"].endswith("auth.md.spec")
     assert search_output[0]["source_path"] == "auth.md"
+
+
+def test_cli_load_dry_run_prints_walkthrough(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    pack_path = tmp_path / "docs.specpack"
+
+    assert main(["load", str(docs), str(pack_path), "--dry-run", "--no-color"]) == 0
+    output = capsys.readouterr().out
+    assert "Spectrum load will walk you through" in output
+    assert "spectrum doctor" in output
+    assert f"spectrum pack {docs} {pack_path} --json" in output
+    assert f"spectrum serve {pack_path} --port 7777" in output
+    assert "Dry run only" in output
+
+
+def test_cli_load_can_pack_without_serving(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("Guided load packs this repo.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+
+    assert main(["load", str(docs), str(pack_path), "--yes", "--no-serve", "--no-color"]) == 0
+    output = capsys.readouterr().out
+    assert pack_path.exists()
+    assert "Spectrum doctor: ok" in output
+    assert "Pack ready:" in output
+    assert f"Start it later with: spectrum serve {pack_path} --port 7777" in output
+
+
+def test_cli_load_appends_specpack_suffix_for_bare_output(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    pack_base = tmp_path / "output"
+
+    assert main(["load", str(docs), str(pack_base), "--dry-run", "--no-color"]) == 0
+    output = capsys.readouterr().out
+    assert f"spectrum pack {docs} {pack_base}.specpack --json" in output
+    assert f"spectrum serve {pack_base}.specpack --port 7777" in output
+
+
+def test_cli_load_rejects_non_specpack_extension(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    output = tmp_path / "output.zip"
+
+    assert main(["load", str(docs), str(output), "--dry-run", "--no-color"]) == 1
+    assert "output path must end with .specpack" in capsys.readouterr().err

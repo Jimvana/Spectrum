@@ -11,6 +11,33 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 
+SPECTRUM_BANNER = [
+    "  █████████                               █████                                        ",
+    " ███▒▒▒▒▒███                             ▒▒███                                         ",
+    "▒███    ▒▒▒  ████████   ██████   ██████  ███████   ████████  █████ ████ █████████████ ",
+    "▒▒█████████ ▒▒███▒▒███ ███▒▒███ ███▒▒███▒▒▒███▒   ▒▒███▒▒███▒▒███ ▒███ ▒▒███▒▒███▒▒███",
+    " ▒▒▒▒▒▒▒▒███ ▒███ ▒███▒███████ ▒███ ▒▒▒   ▒███     ▒███ ▒▒▒  ▒███ ▒███  ▒███ ▒███ ▒███",
+    " ███    ▒███ ▒███ ▒███▒███▒▒▒  ▒███  ███  ▒███ ███ ▒███      ▒███ ▒███  ▒███ ▒███ ▒███",
+    "▒▒█████████  ▒███████ ▒▒██████ ▒▒██████   ▒▒█████  █████     ▒▒████████ █████▒███ █████",
+    " ▒▒▒▒▒▒▒▒▒   ▒███▒▒▒   ▒▒▒▒▒▒   ▒▒▒▒▒▒     ▒▒▒▒▒  ▒▒▒▒▒       ▒▒▒▒▒▒▒▒ ▒▒▒▒▒ ▒▒▒ ▒▒▒▒▒ ",
+    "             ▒███                                                                      ",
+    "             █████                                                                     ",
+    "            ▒▒▒▒▒                                                                      ",
+]
+
+SPECTRUM_COLORS = [
+    "\033[38;2;255;0;76m",
+    "\033[38;2;255;122;0m",
+    "\033[38;2;255;208;0m",
+    "\033[38;2;88;214;141m",
+    "\033[38;2;0;212;255m",
+    "\033[38;2;77;124;255m",
+    "\033[38;2;155;92;255m",
+    "\033[38;2;255;79;216m",
+]
+ANSI_RESET = "\033[0m"
+
+
 def _json_default(value):
     if isinstance(value, Path):
         return str(value)
@@ -24,6 +51,75 @@ def emit(value, *, as_json: bool) -> None:
         print(json.dumps(value, default=_json_default, indent=2))
     else:
         print(value)
+
+
+def _supports_color(*, disabled: bool, forced: bool) -> bool:
+    if disabled or "NO_COLOR" in os.environ:
+        return False
+    if forced:
+        return True
+    if not sys.stdout.isatty():
+        return False
+    if os.name != "nt":
+        return True
+    if os.environ.get("WT_SESSION") or os.environ.get("ANSICON"):
+        return True
+    if os.environ.get("ConEmuANSI", "").upper() == "ON":
+        return True
+    term = os.environ.get("TERM", "").lower()
+    return any(marker in term for marker in ["xterm", "ansi", "color", "cygwin"])
+
+
+def print_banner(*, color: bool) -> None:
+    for idx, line in enumerate(SPECTRUM_BANNER):
+        if color:
+            print(f"{SPECTRUM_COLORS[idx % len(SPECTRUM_COLORS)]}{line}{ANSI_RESET}")
+        else:
+            print(line)
+
+
+def _prompt(message: str, default: str) -> str:
+    suffix = f" [{default}]" if default else ""
+    try:
+        value = input(f"{message}{suffix}: ").strip()
+    except EOFError:
+        value = ""
+    return value or default
+
+
+def _confirm(message: str, *, default: bool) -> bool:
+    marker = "Y/n" if default else "y/N"
+    try:
+        value = input(f"{message} [{marker}]: ").strip().lower()
+    except EOFError:
+        return default
+    if not value:
+        return default
+    return value in {"y", "yes"}
+
+
+def _default_pack_path(source: Path) -> Path:
+    name = source.resolve().name if source.exists() else source.name
+    if not name or name in {".", ".."}:
+        name = Path.cwd().name
+    return Path.cwd() / f"{name}.specpack"
+
+
+def _normalize_load_output(path: Path) -> Path:
+    if path.suffix.lower() == ".specpack":
+        return path
+    if path.suffix:
+        raise ValueError("output path must end with .specpack")
+    return path.with_suffix(".specpack")
+
+
+def _quote_command_arg(value: str | Path) -> str:
+    text = str(value)
+    if not text:
+        return '""'
+    if any(char.isspace() for char in text):
+        return f'"{text}"'
+    return text
 
 
 def command_encode(args: argparse.Namespace) -> int:
@@ -116,6 +212,113 @@ def command_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_serve(args: argparse.Namespace) -> int:
+    from spectrum_server.app import ApiError, PackRegistry, run_server
+
+    registry = PackRegistry()
+    try:
+        if args.specpack:
+            registry.add("repo", args.specpack)
+        for idx, value in enumerate(args.pack, start=1):
+            if "=" in value:
+                pack_id, path = value.split("=", 1)
+            else:
+                pack_id = f"pack-{idx}"
+                path = value
+            registry.add(pack_id, path)
+    except ApiError as exc:
+        raise ValueError(exc.message) from exc
+
+    print(f"spectrum serve listening on http://{args.host}:{args.port}", file=sys.stderr)
+    try:
+        run_server(host=args.host, port=args.port, registry=registry, quiet=args.quiet)
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+def command_load(args: argparse.Namespace) -> int:
+    print_banner(color=_supports_color(disabled=args.no_color, forced=args.color))
+    print()
+    print("Spectrum load will walk you through the local agent-retrieval path:")
+    print("  1. check this install")
+    print("  2. pack a repo into a .specpack")
+    print("  3. serve that pack on the local HTTP API")
+    print()
+
+    source_text = args.source or _prompt("Repo or folder to pack", ".")
+    source = Path(source_text).expanduser()
+    default_output = str(_default_pack_path(source))
+    output_text = args.output or _prompt("Output .specpack path", default_output)
+    output = _normalize_load_output(Path(output_text).expanduser())
+
+    port = args.port
+    if args.source is None and args.output is None and args.port == 7777:
+        port_text = _prompt("Local API port", str(args.port))
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise ValueError(f"invalid port: {port_text}") from exc
+
+    if not source.exists():
+        raise FileNotFoundError(source)
+    commands = [
+        "spectrum doctor",
+        f"spectrum pack {_quote_command_arg(source)} {_quote_command_arg(output)} --json",
+        f"spectrum serve {_quote_command_arg(output)} --port {port}",
+    ]
+
+    print("Commands:")
+    for command in commands:
+        print(f"  {command}")
+    print()
+
+    if args.dry_run:
+        print("Dry run only. No pack was written and no server was started.")
+        return 0
+
+    if not args.yes and not _confirm("Run these steps now?", default=True):
+        print("Stopped before making changes.")
+        return 0
+
+    doctor_code = command_doctor(argparse.Namespace(json=False))
+    if doctor_code:
+        return doctor_code
+
+    print()
+    print(f"Packing {_quote_command_arg(source)} -> {_quote_command_arg(output)}")
+    pack_code = command_pack(
+        argparse.Namespace(
+            input=str(source),
+            output=str(output),
+            all=args.all,
+            language=args.language,
+            rle=args.rle,
+            zlib_level=args.zlib_level,
+            verbose=args.verbose,
+            json=True,
+        )
+    )
+    if pack_code:
+        return pack_code
+
+    print()
+    print(f"Pack ready: {output}")
+    print(f"Local API: http://127.0.0.1:{port}")
+    print("Press Ctrl+C to stop the server.")
+    print()
+
+    if args.no_serve:
+        print(f"Start it later with: {commands[-1]}")
+        return 0
+
+    if not args.yes and not _confirm("Start the local API server now?", default=True):
+        print(f"Start it later with: {commands[-1]}")
+        return 0
+
+    return command_serve(argparse.Namespace(specpack=str(output), pack=[], host="127.0.0.1", port=port, quiet=False))
+
+
 def _doctor_check(name: str, ok: bool, detail: str, fix: str | None = None) -> dict[str, object]:
     payload: dict[str, object] = {"name": name, "ok": ok, "detail": detail}
     if fix:
@@ -164,7 +367,7 @@ def command_doctor(args: argparse.Namespace) -> int:
             )
         )
 
-    for module_name in ["spectrum_core", "spectrum_index", "spectrum_cli"]:
+    for module_name in ["spectrum_core", "spectrum_index", "spectrum_cli", "spectrum_server"]:
         spec = importlib.util.find_spec(module_name)
         checks.append(
             _doctor_check(
@@ -310,6 +513,30 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--no-build", action="store_true", help="Fail if no index is available")
     search.add_argument("--json", action="store_true")
     search.set_defaults(func=command_search)
+
+    serve = sub.add_parser("serve", help="Run the local Spectrum HTTP API")
+    serve.add_argument("specpack", nargs="?", help="Register one .specpack as pack id 'repo'")
+    serve.add_argument("--pack", action="append", default=[], help="Register another pack as id=path or path")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=7777)
+    serve.add_argument("--quiet", action="store_true")
+    serve.set_defaults(func=command_serve)
+
+    load = sub.add_parser("load", help="Guided walkthrough for pack and local serve")
+    load.add_argument("source", nargs="?", help="Repo or folder to pack")
+    load.add_argument("output", nargs="?", help="Output .specpack path")
+    load.add_argument("--port", type=int, default=7777)
+    load.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    load.add_argument("--language", help="Force a language instead of extension detection")
+    load.add_argument("--rle", default="off", choices=["off", "auto", "force"], help="RLE mode")
+    load.add_argument("--zlib-level", type=int, default=9, choices=range(1, 10), metavar="1-9")
+    load.add_argument("--verbose", action="store_true", help="Show lower-level codec output")
+    load.add_argument("--yes", "-y", action="store_true", help="Accept prompts and run without confirmation")
+    load.add_argument("--no-serve", action="store_true", help="Pack only and print the serve command")
+    load.add_argument("--dry-run", action="store_true", help="Show the walkthrough without running commands")
+    load.add_argument("--color", action="store_true", help="Force ANSI banner colors")
+    load.add_argument("--no-color", action="store_true", help="Disable ANSI banner colors")
+    load.set_defaults(func=command_load)
 
     doctor = sub.add_parser("doctor", help="Check local runtime and bundled install health")
     doctor.add_argument("--json", action="store_true")

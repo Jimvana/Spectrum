@@ -8,6 +8,7 @@ const pythonPaths = [
   join(root, "packages", "core", "src"),
   join(root, "packages", "index", "src"),
   join(root, "packages", "cli", "src"),
+  join(root, "packages", "server", "src"),
 ];
 
 const env = {
