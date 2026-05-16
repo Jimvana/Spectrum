@@ -208,7 +208,7 @@ answer: "Is Spectrum better enough for my workflow?"
 Target the bridge work at the next preview release, for example:
 
 ```text
-spectrumstore@0.1.0-preview.3
+spectrumstore@0.1.0-preview.5
 ```
 
 Minimum release criteria:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-preview.5 - 2026-05-17
+
+### Added
+
+- Spectrum Hub guided workflows for building, appending, serving, and verifying
+  portable project packs.
+- Project pack runtime launchers and default `.spectrum/project.specpack`
+  output for `spectrum project init`.
+- Local API endpoints for manifest discovery, document list/upsert/delete, ops
+  data, readiness checks, hydrate URLs, and server shutdown.
+- ByteSpectrum static site source and project API workflow documentation.
+
 ## 0.1.0-preview.1 - 2026-05-14
 
 Initial Spectrum Store developer preview.

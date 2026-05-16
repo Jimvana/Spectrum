@@ -4,7 +4,7 @@ Spectrum is a local-first way to turn a codebase into a compact, lossless,
 searchable `.specpack` that can be queried and restored byte-for-byte.
 
 The developer preview ships first as an npm-installed CLI. The current preview
-is `spectrumstore@0.1.0-preview.4`.
+is `spectrumstore@0.1.0-preview.5`.
 
 ## Turn The Key
 
