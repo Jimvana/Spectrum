@@ -3,6 +3,7 @@
 from .pack import (
     PackEntry,
     SpectrumPack,
+    append_to_pack,
     decode_member,
     inspect_pack,
     pack,
@@ -30,6 +31,7 @@ __all__ = [
     "SpecInfo",
     "SpectrumPack",
     "ValidationReport",
+    "append_to_pack",
     "decode_file",
     "decode_member",
     "encode_file",

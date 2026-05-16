@@ -15,6 +15,7 @@ python -m spectrum_server.main --pack docs=./docs.specpack --port 7777
 Endpoints:
 
 - `GET /health`
+- `GET /project`
 - `GET /packs`
 - `POST /packs` with `{"id": "docs", "path": "./docs.specpack"}`
 - `GET /packs/{pack_id}`
@@ -22,6 +23,8 @@ Endpoints:
 - `POST /packs/{pack_id}/verify`
 - `POST /packs/{pack_id}/index` with `{"embed": true}`
 - `POST /packs/{pack_id}/search` with `{"query": "authentication middleware", "top_k": 5}`
+- `GET /projects/{pack_id}/context`
+- `GET /packs/{pack_id}/context`
 - `POST /packs/{pack_id}/unpack` with `{"output_dir": "./decoded"}`
 
 Document ingestion, memory, and benchmark endpoints will be added after the

@@ -36,6 +36,67 @@ SPECTRUM_COLORS = [
     "\033[38;2;255;79;216m",
 ]
 ANSI_RESET = "\033[0m"
+PROJECT_CONTEXT_DIR = ".spectrum-project"
+PROJECT_CONTEXT_FILES = {
+    "project.md": """# Project
+
+Name: {name}
+Root: {root}
+
+Describe what this project is, who uses it, and where the important source
+folders live.
+""",
+    "status.md": """# Status
+
+Current state:
+
+- Fill in the last known working state.
+- Note active tasks, blockers, and what an agent should check first.
+""",
+    "agent-rules.md": """# Agent Rules
+
+- Search and hydrate this pack before making project assumptions.
+- Ask before using SSH, deploying, reading secrets, or changing production data.
+- Append durable notes after important work.
+""",
+    "architecture.md": """# Architecture
+
+Record the main app structure, services, data stores, frameworks, and important
+tradeoffs.
+""",
+    "deploy.md": """# Deploy
+
+Record deployment commands, build steps, verification checks, and rollback notes.
+""",
+    "server.md": """# Server
+
+Record hosts, service names, install paths, log paths, restart commands, and
+health checks.
+""",
+    "ssh.md": """# SSH
+
+Store SSH aliases and connection notes here. Prefer aliases such as
+`project-prod` instead of raw keys.
+""",
+    "secrets.refs.md": """# Secret References
+
+Store references to secrets, not raw secrets.
+
+Examples:
+
+- SSH key: available through local ssh-agent.
+- Password vault: 1Password or Bitwarden item name.
+- Env file: path on the server or local machine.
+""",
+    "runbook.md": """# Runbook
+
+Record common operations, troubleshooting steps, recovery commands, and checks.
+""",
+    "decisions.md": """# Decisions
+
+Record important project decisions, dates, and reasons.
+""",
+}
 
 
 def _json_default(value):
@@ -122,6 +183,19 @@ def _quote_command_arg(value: str | Path) -> str:
     return text
 
 
+def _write_project_templates(project_dir: Path, *, name: str, replace: bool) -> list[Path]:
+    context_dir = project_dir / PROJECT_CONTEXT_DIR
+    context_dir.mkdir(parents=True, exist_ok=True)
+    created: list[Path] = []
+    for filename, template in PROJECT_CONTEXT_FILES.items():
+        path = context_dir / filename
+        if path.exists() and not replace:
+            continue
+        path.write_text(template.format(name=name, root=project_dir.resolve()), encoding="utf-8")
+        created.append(path)
+    return created
+
+
 def command_encode(args: argparse.Namespace) -> int:
     from spectrum_core import encode_file
 
@@ -155,6 +229,24 @@ def command_pack(args: argparse.Namespace) -> int:
         language=args.language,
         rle=args.rle,
         zlib_level=args.zlib_level,
+        verbose=args.verbose,
+    )
+    emit(summary, as_json=args.json)
+    return 0
+
+
+def command_append(args: argparse.Namespace) -> int:
+    from spectrum_core import append_to_pack
+
+    summary = append_to_pack(
+        args.pack,
+        args.input,
+        output_path=args.output,
+        include_all=args.all,
+        language=args.language,
+        rle=args.rle,
+        zlib_level=args.zlib_level,
+        replace=args.replace,
         verbose=args.verbose,
     )
     emit(summary, as_json=args.json)
@@ -230,10 +322,102 @@ def command_serve(args: argparse.Namespace) -> int:
         raise ValueError(exc.message) from exc
 
     print(f"spectrum serve listening on http://{args.host}:{args.port}", file=sys.stderr)
+    print(f"project dashboard: http://{args.host}:{args.port}/project", file=sys.stderr)
+    print(f"agent context: http://{args.host}:{args.port}/projects/repo/context", file=sys.stderr)
     try:
         run_server(host=args.host, port=args.port, registry=registry, quiet=args.quiet)
     except KeyboardInterrupt:
         return 130
+    return 0
+
+
+def command_project_init(args: argparse.Namespace) -> int:
+    from spectrum_core import pack, verify_pack
+    from spectrum_index import build_index
+
+    project_dir = Path(args.source).expanduser()
+    if project_dir.exists() and not project_dir.is_dir():
+        raise ValueError("project source must be a directory")
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    output = _normalize_load_output(Path(args.output).expanduser()) if args.output else _default_pack_path(project_dir)
+    name = args.name or project_dir.resolve().name
+    created = _write_project_templates(project_dir, name=name, replace=args.replace_template)
+    pack_summary = pack(
+        project_dir,
+        output,
+        include_all=args.all,
+        language=args.language,
+        rle=args.rle,
+        zlib_level=args.zlib_level,
+        verbose=args.verbose,
+    )
+    verify_report = verify_pack(output).to_dict()
+    index_summary = None
+    if not args.no_index:
+        result = build_index(output, embed=True, verbose=args.verbose)
+        index_summary = {key: value for key, value in result.items() if key != "index"}
+
+    payload = {
+        "project": str(project_dir.resolve()),
+        "name": name,
+        "pack": str(output.resolve()),
+        "context_dir": str((project_dir / PROJECT_CONTEXT_DIR).resolve()),
+        "created_files": [str(path.resolve()) for path in created],
+        "pack_summary": pack_summary,
+        "verify": verify_report,
+        "index": index_summary,
+        "serve_command": f"spectrum project serve {_quote_command_arg(output)} --port {args.port}",
+        "context_endpoint": f"http://127.0.0.1:{args.port}/projects/repo/context",
+    }
+    if args.json:
+        emit(payload, as_json=True)
+    else:
+        print(f"Project pack ready: {output}")
+        print(f"Context files: {project_dir / PROJECT_CONTEXT_DIR}")
+        print(f"Verify: {'valid' if verify_report.get('valid') else 'failed'}")
+        if index_summary:
+            print("Search index: embedded")
+        print(f"Serve it with: {payload['serve_command']}")
+        print(f"Agent context: {payload['context_endpoint']}")
+    return 0 if verify_report.get("valid") else 1
+
+
+def command_project_add(args: argparse.Namespace) -> int:
+    from spectrum_core import append_to_pack, verify_pack
+    from spectrum_index import build_index
+
+    append_summary = append_to_pack(
+        args.pack,
+        args.input,
+        include_all=args.all,
+        language=args.language,
+        rle=args.rle,
+        zlib_level=args.zlib_level,
+        replace=args.replace,
+        verbose=args.verbose,
+    )
+    verify_report = verify_pack(args.pack).to_dict()
+    index_summary = None
+    if not args.no_index:
+        result = build_index(args.pack, embed=True, verbose=args.verbose)
+        index_summary = {key: value for key, value in result.items() if key != "index"}
+    payload = {
+        "pack": str(Path(args.pack).expanduser().resolve()),
+        "append": append_summary,
+        "verify": verify_report,
+        "index": index_summary,
+    }
+    emit(payload, as_json=args.json)
+    return 0 if verify_report.get("valid") else 1
+
+
+def command_project_serve(args: argparse.Namespace) -> int:
+    return command_serve(argparse.Namespace(specpack=args.pack, pack=[], host=args.host, port=args.port, quiet=args.quiet))
+
+
+def command_project(args: argparse.Namespace) -> int:
+    print("Use a project subcommand: init, add, or serve")
     return 0
 
 
@@ -479,6 +663,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_codec_options(pack_parser)
     pack_parser.set_defaults(func=command_pack)
 
+    append = sub.add_parser("append", help="Append files or a folder to an existing .specpack")
+    append.add_argument("pack", help="Existing .specpack to append to")
+    append.add_argument("input", help="File or folder to append")
+    append.add_argument("-o", "--output", help="Write a new .specpack instead of updating in place")
+    append.add_argument("--replace", action="store_true", help="Replace existing source paths in the pack")
+    append.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    add_common_codec_options(append)
+    append.set_defaults(func=command_append)
+
     unpack_parser = sub.add_parser("unpack", aliases=["decode-pack"], help="Decode a .specpack")
     unpack_parser.add_argument("input")
     unpack_parser.add_argument("output")
@@ -521,6 +714,37 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=7777)
     serve.add_argument("--quiet", action="store_true")
     serve.set_defaults(func=command_serve)
+
+    project = sub.add_parser("project", help="Portable project pack workflows")
+    project.set_defaults(func=command_project)
+    project_sub = project.add_subparsers(dest="project_command")
+
+    project_init = project_sub.add_parser("init", help="Create a portable project pack")
+    project_init.add_argument("source", help="Project folder to initialize")
+    project_init.add_argument("output", nargs="?", help="Output .specpack path")
+    project_init.add_argument("--name", help="Human-readable project name")
+    project_init.add_argument("--replace-template", action="store_true", help="Overwrite existing context template files")
+    project_init.add_argument("--no-index", action="store_true", help="Skip embedding a search index")
+    project_init.add_argument("--port", type=int, default=7777, help="Port to show in the suggested serve command")
+    project_init.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    add_common_codec_options(project_init)
+    project_init.set_defaults(func=command_project_init)
+
+    project_add = project_sub.add_parser("add", help="Append files or notes to a portable project pack")
+    project_add.add_argument("pack", help="Existing .specpack to append to")
+    project_add.add_argument("input", help="File or folder to append")
+    project_add.add_argument("--replace", action="store_true", help="Replace existing source paths in the pack")
+    project_add.add_argument("--no-index", action="store_true", help="Skip rebuilding the embedded search index")
+    project_add.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    add_common_codec_options(project_add)
+    project_add.set_defaults(func=command_project_add)
+
+    project_serve = project_sub.add_parser("serve", help="Serve a portable project pack locally")
+    project_serve.add_argument("pack", help="Existing .specpack to serve as pack id 'repo'")
+    project_serve.add_argument("--host", default="127.0.0.1")
+    project_serve.add_argument("--port", type=int, default=7777)
+    project_serve.add_argument("--quiet", action="store_true")
+    project_serve.set_defaults(func=command_project_serve)
 
     load = sub.add_parser("load", help="Guided walkthrough for pack and local serve")
     load.add_argument("source", nargs="?", help="Repo or folder to pack")

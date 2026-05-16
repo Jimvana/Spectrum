@@ -105,6 +105,42 @@ spectrum pack ./docs ./docs.specpack --json
 spectrum serve ./docs.specpack --port 7777
 ```
 
+As the project changes, append new continuity notes, deployment docs, or source
+files without rebuilding the pack from scratch:
+
+```powershell
+spectrum append ./docs.specpack ./project-notes --json
+```
+
+If a source path already exists in the pack, append fails by default. Use
+`--replace` when you intentionally want the newer file to replace the existing
+packed document. Appending drops any embedded `index.bin` because it is derived
+from the old manifest; rebuild it with `spectrum index ./docs.specpack --embed`
+when you want embedded search again.
+
+For a portable project pack with standard agent context files, use the project
+workflow:
+
+```powershell
+spectrum project init ./my-project ./my-project.specpack --name "My Project"
+spectrum project add ./my-project.specpack ./new-notes
+spectrum project serve ./my-project.specpack --port 7777
+```
+
+This creates `.spectrum-project/` inside the project with files such as
+`project.md`, `deploy.md`, `ssh.md`, and `secrets.refs.md`. When served, agents
+can fetch the starter context bundle from:
+
+```text
+http://127.0.0.1:7777/projects/repo/context
+```
+
+Humans can use the built-in local dashboard:
+
+```text
+http://127.0.0.1:7777/project
+```
+
 Additional diagnostics:
 
 ```powershell

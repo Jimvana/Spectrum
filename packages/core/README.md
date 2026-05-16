@@ -12,9 +12,10 @@ Planned layout:
 The first core package is Python-based and wraps the existing production Spectrum algorithm modules from the repository root.
 
 ```python
-from spectrum_core import pack, unpack, verify_pack
+from spectrum_core import append_to_pack, pack, unpack, verify_pack
 
 pack("./docs", "./docs.specpack")
+append_to_pack("./docs.specpack", "./project-notes")
 report = verify_pack("./docs.specpack")
 unpack("./docs.specpack", "./decoded")
 ```
@@ -25,6 +26,7 @@ Useful entry points:
 - `decode_file(spec, output)` - reconstruct source from a `.spec` file.
 - `inspect_spec(path)` - read `.spec` header metadata.
 - `pack(input_path, output_path)` - create a `.specpack`.
+- `append_to_pack(pack_path, input_path)` - append files or a folder to an existing `.specpack`.
 - `unpack(pack_path, output_dir)` - decode a `.specpack`.
 - `inspect_pack(pack_path)` - read `.specpack` manifest and size metadata.
 - `verify_spec(path)`, `verify_pack(path)`, `verify_path(path)` - validate decode fidelity.

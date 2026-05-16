@@ -20,6 +20,16 @@ def request(port: int, method: str, path: str, body: dict | None = None) -> tupl
     return response.status, data
 
 
+def text_request(port: int, method: str, path: str) -> tuple[int, str, str]:
+    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+    connection.request(method, path)
+    response = connection.getresponse()
+    content_type = response.getheader("content-type", "")
+    data = response.read().decode("utf-8")
+    connection.close()
+    return response.status, content_type, data
+
+
 def test_server_pack_lifecycle(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -100,6 +110,70 @@ def test_server_reads_nested_document_without_full_unpack(tmp_path: Path) -> Non
         assert status == 200
         assert document["path"] == "notes/memory.md"
         assert document["content"] == "Nested document lookup.\n"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_builds_project_context_bundle(tmp_path: Path) -> None:
+    docs = tmp_path / "project"
+    context = docs / ".spectrum-project"
+    context.mkdir(parents=True)
+    (context / "project.md").write_text("# Project\n\nByteSpectrum site.\n", encoding="utf-8")
+    (context / "deploy.md").write_text("# Deploy\n\nRun the production deploy check.\n", encoding="utf-8")
+    (context / "secrets.refs.md").write_text("# Secret References\n\nUse ssh-agent.\n", encoding="utf-8")
+    pack_path = tmp_path / "project.specpack"
+    pack(docs, pack_path)
+
+    registry = PackRegistry()
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        assert request(port, "POST", "/packs", {"id": "repo", "path": str(pack_path)})[0] == 200
+        status, context_bundle = request(port, "GET", "/projects/repo/context")
+        assert status == 200
+        assert context_bundle["id"] == "repo"
+        assert "ByteSpectrum site" in context_bundle["project"]
+        assert "production deploy" in context_bundle["deploy"]
+        assert "ssh-agent" in context_bundle["secret_references"]
+        assert "status.md" in context_bundle["missing"]
+        assert context_bundle["documents"][0]["path"] == ".spectrum-project/project.md"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_serves_project_dashboard(tmp_path: Path) -> None:
+    docs = tmp_path / "project"
+    context = docs / ".spectrum-project"
+    context.mkdir(parents=True)
+    (context / "project.md").write_text("# Project\n\nDashboard test.\n", encoding="utf-8")
+    pack_path = tmp_path / "project.specpack"
+    pack(docs, pack_path)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        status, content_type, html = text_request(port, "GET", "/project")
+        assert status == 200
+        assert "text/html" in content_type
+        assert "Spectrum Project" in html
+        assert "/projects/${packId}/context" in html
+        assert "/packs/${packId}/search" in html
+        assert "Verify Pack" in html
+        assert "Rebuild Search" in html
+        assert "copy-endpoint" in html
+        assert "expectedContextFiles" in html
     finally:
         server.shutdown()
         server.server_close()

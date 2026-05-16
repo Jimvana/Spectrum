@@ -83,6 +83,52 @@ def test_cli_pack_inspect_unpack_verify(tmp_path: Path, capsys) -> None:
     assert verify_output["valid"]
 
 
+def test_cli_append_adds_documents_to_existing_pack(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("Original context.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    decoded = tmp_path / "decoded"
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    (extra / "deploy.md").write_text("Deploy context grows here.\n", encoding="utf-8")
+
+    assert main(["pack", str(docs), str(pack_path), "--json"]) == 0
+    capsys.readouterr()
+
+    assert main(["append", str(pack_path), str(extra), "--json"]) == 0
+    append_output = json.loads(capsys.readouterr().out)
+    assert append_output["entries"] == 2
+    assert append_output["appended_entries"] == 1
+
+    assert main(["unpack", str(pack_path), str(decoded), "--json"]) == 0
+    capsys.readouterr()
+    assert (decoded / "note.md").read_text(encoding="utf-8") == "Original context.\n"
+    assert (decoded / "deploy.md").read_text(encoding="utf-8") == "Deploy context grows here.\n"
+
+
+def test_cli_project_init_and_add_create_portable_pack(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "site"
+    project.mkdir()
+    (project / "app.py").write_text("print('hello')\n", encoding="utf-8")
+    pack_path = tmp_path / "site.specpack"
+
+    assert main(["project", "init", str(project), str(pack_path), "--name", "Site", "--no-index", "--json"]) == 0
+    init_output = json.loads(capsys.readouterr().out)
+    assert init_output["name"] == "Site"
+    assert pack_path.exists()
+    assert (project / ".spectrum-project" / "project.md").exists()
+    assert init_output["verify"]["valid"]
+
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "handoff.md").write_text("Remember the production deploy check.\n", encoding="utf-8")
+    assert main(["project", "add", str(pack_path), str(notes), "--no-index", "--json"]) == 0
+    add_output = json.loads(capsys.readouterr().out)
+    assert add_output["append"]["appended_entries"] == 1
+    assert add_output["verify"]["valid"]
+
+
 def test_cli_index_and_search(tmp_path: Path, capsys) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
