@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
+import threading
+import zipfile
 from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
-from spectrum_core import SpectrumPack, decode_member, inspect_pack, unpack, verify_pack
+from spectrum_core import SpectrumPack, append_to_pack, decode_member, encode_file, inspect_pack, unpack, verify_pack
 from spectrum_index import build_pack_index, search_pack
 
 SERVER_VERSION = "0.1.0"
@@ -22,10 +26,12 @@ PROJECT_CONTEXT_FILES = [
     "server.md",
     "ssh.md",
     "secrets.refs.md",
+    "ops.json",
     "runbook.md",
     "decisions.md",
 ]
 PROJECT_CONTEXT_DIR = ".spectrum-project"
+TRASH_SOURCE_PATH = ".spectrum-trash/trash.jsonl"
 PROJECT_FIELD_NAMES = {
     "project.md": "project",
     "status.md": "status",
@@ -35,6 +41,7 @@ PROJECT_FIELD_NAMES = {
     "server.md": "server",
     "ssh.md": "ssh",
     "secrets.refs.md": "secret_references",
+    "ops.json": "ops_json",
     "runbook.md": "runbook",
     "decisions.md": "decisions",
 }
@@ -66,6 +73,7 @@ class PackRegistry:
 
     def __init__(self) -> None:
         self._packs: dict[str, Path] = {}
+        self.lock = threading.RLock()
 
     def add(self, pack_id: str, path: str | Path) -> dict:
         if not pack_id:
@@ -116,6 +124,233 @@ def _decode_document(pack_path: Path, source_path: str) -> dict:
         }
 
 
+def _safe_source_path(value: str) -> str:
+    path = Path(value.replace("\\", "/"))
+    if not value or path.is_absolute() or ".." in path.parts:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"unsafe document path: {value!r}")
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"unsafe document path: {value!r}")
+    return path.as_posix()
+
+
+def _upsert_pack_document(pack_path: Path, source_path: str, body: dict) -> dict:
+    source = _safe_source_path(source_path)
+    if "content_bytes" in body:
+        raw_bytes = bytes(int(value) for value in body["content_bytes"])
+    elif "content" in body:
+        raw_bytes = str(body["content"]).encode("utf-8")
+    else:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "content or content_bytes is required")
+
+    replace = bool(body.get("replace", True))
+    rebuild_index = bool(body.get("rebuild_index", True))
+    with tempfile.TemporaryDirectory(prefix="spectrum-server-upsert-") as tmp_name:
+        tmp = Path(tmp_name)
+        target = tmp / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw_bytes)
+        append_summary = append_to_pack(pack_path, tmp, replace=replace, include_all=True)
+
+    verify_report = verify_pack(pack_path).to_dict()
+    index_summary = None
+    if rebuild_index:
+        result = build_pack_index(pack_path, embed=True)
+        index_summary = {key: value for key, value in result.items() if key != "index"}
+    document = _decode_document(pack_path, source)
+    return {
+        "path": str(pack_path),
+        "source_path": source,
+        "append": append_summary,
+        "verify": verify_report,
+        "index": index_summary,
+        "document": {
+            key: value
+            for key, value in document.items()
+            if key != "content_bytes"
+        },
+    }
+
+
+def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None = None) -> dict:
+    source = _safe_source_path(source_path)
+    body = body or {}
+    rebuild_index = bool(body.get("rebuild_index", True))
+    reason = str(body.get("reason") or "")
+    with SpectrumPack.open(pack_path) as opened:
+        entry = opened.find_entry(source)
+        if entry is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {source}")
+        manifest = dict(opened.manifest)
+        entries = [
+            raw
+            for raw in manifest.get("entries", [])
+            if str(raw.get("source", "")) not in {source, TRASH_SOURCE_PATH}
+        ]
+        removed_spec = entry.spec
+
+    with tempfile.TemporaryDirectory(prefix="spectrum-server-delete-") as tmp_name:
+        tmp = Path(tmp_name)
+        removed_output = tmp / "removed"
+        result = decode_member(pack_path, source, removed_output)
+        removed_content = removed_output.read_text(encoding="utf-8", errors="replace")
+        trash_existing = ""
+        with SpectrumPack.open(pack_path) as opened:
+            if opened.find_entry(TRASH_SOURCE_PATH) is not None:
+                trash_output = tmp / "existing-trash.jsonl"
+                decode_member(pack_path, TRASH_SOURCE_PATH, trash_output)
+                trash_existing = trash_output.read_text(encoding="utf-8", errors="replace")
+
+        trash_record = {
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+            "source_path": source,
+            "reason": reason,
+            "checksum_ok": result.checksum_ok,
+            "length_ok": result.length_ok,
+            "content": removed_content,
+        }
+        trash_content = trash_existing + json.dumps(trash_record, ensure_ascii=False) + "\n"
+        trash_source = tmp / TRASH_SOURCE_PATH
+        trash_source.parent.mkdir(parents=True, exist_ok=True)
+        trash_source.write_text(trash_content, encoding="utf-8")
+        trash_spec = tmp / "trash.spec"
+        encode_result = encode_file(trash_source, trash_spec)
+        trash_entry = {
+            "source": TRASH_SOURCE_PATH,
+            "spec": f"files/{TRASH_SOURCE_PATH}.spec",
+            "original_size": encode_result.original_size,
+            "spec_size": encode_result.spec_size,
+            "metadata": {"system": True, "role": "trash"},
+        }
+        entries.append(trash_entry)
+        manifest["entries"] = entries
+
+        tmp_zip = Path(tmp_name) / pack_path.name
+        with zipfile.ZipFile(pack_path) as source_zip, zipfile.ZipFile(
+            tmp_zip, "w", compression=zipfile.ZIP_STORED
+        ) as target_zip:
+            for item in source_zip.infolist():
+                if item.filename in {"manifest.json", removed_spec, "index.bin", trash_entry["spec"]}:
+                    continue
+                target_zip.writestr(item, source_zip.read(item.filename))
+            target_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
+            target_zip.write(trash_spec, trash_entry["spec"])
+        shutil.move(str(tmp_zip), pack_path)
+
+    verify_report = verify_pack(pack_path).to_dict()
+    index_summary = None
+    if rebuild_index:
+        result = build_pack_index(pack_path, embed=True)
+        index_summary = {key: value for key, value in result.items() if key != "index"}
+    return {
+        "path": str(pack_path),
+        "source_path": source,
+        "removed": True,
+        "archived_to": TRASH_SOURCE_PATH,
+        "verify": verify_report,
+        "index": index_summary,
+    }
+
+
+def _hydrate_url(pack_id: str, source_path: str) -> str:
+    return f"/packs/{quote(pack_id, safe='')}/documents/{quote(source_path, safe='')}"
+
+
+def _document_summary(pack_id: str, entry) -> dict:
+    return {
+        "source_path": entry.source,
+        "path": entry.spec,
+        "id": entry.source_id,
+        "metadata": entry.metadata or {},
+        "original_size": entry.original_size,
+        "spec_size": entry.spec_size,
+        "hydrate_url": _hydrate_url(pack_id, entry.source),
+    }
+
+
+def _pack_manifest(pack_path: Path, pack_id: str) -> dict:
+    with SpectrumPack.open(pack_path) as opened:
+        documents = [_document_summary(pack_id, entry) for entry in opened.entries]
+        return {
+            "id": pack_id,
+            "pack_path": str(pack_path),
+            "format": opened.manifest.get("format"),
+            "version": opened.manifest.get("version"),
+            "dict_version": opened.manifest.get("dict_version"),
+            "source_root": opened.manifest.get("source_root"),
+            "documents": documents,
+        }
+
+
+def _decode_project_ops(pack_path: Path) -> dict:
+    candidates = [f"{PROJECT_CONTEXT_DIR}/ops.json", "ops.json"]
+    with SpectrumPack.open(pack_path) as opened:
+        source_path = next((candidate for candidate in candidates if opened.find_entry(candidate)), None)
+    if source_path is None:
+        return {
+            "missing": True,
+            "path": None,
+            "data": None,
+            "error": None,
+        }
+
+    decoded = _decode_document(pack_path, source_path)
+    try:
+        data = json.loads(decoded["content"])
+    except json.JSONDecodeError as exc:
+        return {
+            "missing": False,
+            "path": decoded["path"],
+            "data": None,
+            "error": f"invalid JSON: {exc.msg}",
+            "checksum_ok": decoded["checksum_ok"],
+            "length_ok": decoded["length_ok"],
+        }
+    return {
+        "missing": False,
+        "path": decoded["path"],
+        "data": data,
+        "error": None,
+        "checksum_ok": decoded["checksum_ok"],
+        "length_ok": decoded["length_ok"],
+    }
+
+
+def _first_site(ops: dict) -> dict:
+    sites = ((ops.get("data") or {}).get("sites") or []) if not ops.get("missing") else []
+    return sites[0] if sites and isinstance(sites[0], dict) else {}
+
+
+def _ops_readiness(ops: dict) -> dict:
+    site = _first_site(ops)
+    ssh = site.get("ssh") if isinstance(site.get("ssh"), dict) else {}
+    deploy = site.get("deploy") if isinstance(site.get("deploy"), dict) else {}
+    policy = (ops.get("data") or {}).get("policy") or {}
+
+    ssh_required = ["host", "user", "identity_file"]
+    deploy_required = ["remote_path"]
+    ssh_missing = [field for field in ssh_required if not ssh.get(field)]
+    deploy_missing = [field for field in deploy_required if not deploy.get(field)]
+
+    return {
+        "ops": {
+            "ready": not ops.get("missing") and ops.get("error") is None,
+            "missing": bool(ops.get("missing")),
+            "path": ops.get("path"),
+            "error": ops.get("error"),
+        },
+        "ssh": {
+            "ready": not ssh_missing and not ops.get("missing") and ops.get("error") is None,
+            "missing": ssh_missing,
+            "requires_confirmation": bool(policy.get("ssh_requires_confirmation", True)),
+        },
+        "deploy": {
+            "ready": not deploy_missing and not ops.get("missing") and ops.get("error") is None,
+            "missing": deploy_missing,
+            "requires_confirmation": bool(policy.get("deploy_requires_confirmation", True)),
+        },
+    }
+
+
 def _build_project_context(pack_path: Path, pack_id: str) -> dict:
     documents = []
     missing = []
@@ -142,12 +377,15 @@ def _build_project_context(pack_path: Path, pack_id: str) -> dict:
         documents.append(document)
         fields[PROJECT_FIELD_NAMES[filename]] = decoded["content"]
 
+    ops = _decode_project_ops(pack_path)
     return {
         "id": pack_id,
         "pack_path": str(pack_path),
         "context_dir": PROJECT_CONTEXT_DIR,
         "documents": documents,
         "missing": missing,
+        "ops": ops,
+        "readiness": _ops_readiness(ops),
         **fields,
     }
 
@@ -672,7 +910,8 @@ def create_handler(registry: PackRegistry | None = None):
 
         def _handle(self, method: str) -> None:
             try:
-                payload = self._route(method)
+                with registry.lock:
+                    payload = self._route(method)
                 if isinstance(payload, HtmlResponse):
                     self._send_html(payload.body, status=payload.status)
                 else:
@@ -694,9 +933,21 @@ def create_handler(registry: PackRegistry | None = None):
             if method == "GET" and parts == ["health"]:
                 return {"status": "ok", "version": SERVER_VERSION}
 
+            if method == "POST" and parts == ["shutdown"]:
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return {"status": "shutting_down"}
+
             if len(parts) == 3 and parts[0] in {"projects", "packs"} and parts[2] == "context" and method == "GET":
                 pack_id = parts[1]
                 return _build_project_context(registry.get(pack_id), pack_id)
+
+            if len(parts) == 3 and parts[0] in {"projects", "packs"} and parts[2] == "ops" and method == "GET":
+                pack_id = parts[1]
+                return _decode_project_ops(registry.get(pack_id))
+
+            if len(parts) == 3 and parts[0] in {"projects", "packs"} and parts[2] == "readiness" and method == "GET":
+                pack_id = parts[1]
+                return _ops_readiness(_decode_project_ops(registry.get(pack_id)))
 
             if parts == ["packs"]:
                 if method == "GET":
@@ -716,6 +967,19 @@ def create_handler(registry: PackRegistry | None = None):
                 if method == "DELETE":
                     return registry.remove(pack_id)
 
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "manifest" and method == "GET":
+                return _pack_manifest(registry.get(parts[1]), parts[1])
+
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
+                return {"documents": _pack_manifest(registry.get(parts[1]), parts[1])["documents"]}
+
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "documents" and method in {"POST", "PUT"}:
+                body = self._read_json()
+                source_path = str(body.get("source_path") or body.get("path") or "")
+                if not source_path:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "source_path is required")
+                return _upsert_pack_document(registry.get(parts[1]), source_path, body)
+
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "verify" and method == "POST":
                 return verify_pack(registry.get(parts[1])).to_dict()
 
@@ -733,16 +997,19 @@ def create_handler(registry: PackRegistry | None = None):
                 query = str(body.get("query") or "")
                 if not query:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "query is required")
-                return {
-                    "results": search_pack(
-                        registry.get(parts[1]),
-                        query,
-                        top_k=int(body.get("top_k", 10)),
-                        language=body.get("language", "txt"),
-                        index_path=body.get("index_path"),
-                        build_if_missing=bool(body.get("build_if_missing", True)),
-                    )
-                }
+                results = search_pack(
+                    registry.get(parts[1]),
+                    query,
+                    top_k=int(body.get("top_k", 10)),
+                    language=body.get("language", "txt"),
+                    index_path=body.get("index_path"),
+                    build_if_missing=bool(body.get("build_if_missing", True)),
+                )
+                for result in results:
+                    source_path = result.get("source_path")
+                    if source_path:
+                        result["hydrate_url"] = _hydrate_url(parts[1], source_path)
+                return {"results": results}
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "unpack" and method == "POST":
                 body = self._read_json()
@@ -756,6 +1023,11 @@ def create_handler(registry: PackRegistry | None = None):
                 pack_id = parts[1]
                 document_path = "/".join(parts[3:])
                 return _decode_document(registry.get(pack_id), document_path)
+
+            if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "documents" and method == "DELETE":
+                pack_id = parts[1]
+                document_path = "/".join(parts[3:])
+                return _delete_pack_document(registry.get(pack_id), document_path, self._read_json())
 
             raise ApiError(HTTPStatus.NOT_FOUND, "route not found")
 

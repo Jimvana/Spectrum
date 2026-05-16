@@ -69,19 +69,28 @@ spectrum serve ./my-project.specpack --port 7777
 Create a portable project pack with standard context files:
 
 ```powershell
-spectrum project init ./my-project ./my-project.specpack --name "My Project"
+spectrum project init ./my-project --name "My Project"
 ```
 
 Append project notes and rebuild the embedded index:
 
 ```powershell
-spectrum project add ./my-project.specpack ./new-notes
+spectrum project add ./my-project/.spectrum/project.specpack ./new-notes
 ```
 
 Serve it as a project pack:
 
 ```powershell
-spectrum project serve ./my-project.specpack --port 7777
+spectrum project serve ./my-project/.spectrum/project.specpack --port 7777
+```
+
+Guided hub workflows for humans:
+
+```powershell
+spectrum hub -b   # build a portable pack
+spectrum hub -a   # append files/folders
+spectrum hub -s   # serve a pack
+spectrum hub -v   # find running local Spectrum API servers
 ```
 
 Human dashboard:
@@ -171,6 +180,22 @@ The CLI creates these under:
 ```text
 .spectrum-project/
 ```
+
+It also creates a runtime folder next to the pack:
+
+```text
+.spectrum/
+  project.specpack
+  start.cmd
+  start.ps1
+  start.command
+  start.sh
+  README.md
+  metadata.json
+```
+
+Windows users can double-click `start.cmd`. macOS users can double-click
+`start.command`. Linux users can run `start.sh`.
 
 Suggested meanings:
 

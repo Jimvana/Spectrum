@@ -122,14 +122,29 @@ For a portable project pack with standard agent context files, use the project
 workflow:
 
 ```powershell
-spectrum project init ./my-project ./my-project.specpack --name "My Project"
-spectrum project add ./my-project.specpack ./new-notes
-spectrum project serve ./my-project.specpack --port 7777
+spectrum project init ./my-project --name "My Project"
+spectrum project add ./my-project/.spectrum/project.specpack ./new-notes
+spectrum project serve ./my-project/.spectrum/project.specpack --port 7777
 ```
 
 This creates `.spectrum-project/` inside the project with files such as
-`project.md`, `deploy.md`, `ssh.md`, and `secrets.refs.md`. When served, agents
-can fetch the starter context bundle from:
+`project.md`, `deploy.md`, `ssh.md`, and `secrets.refs.md`. It also creates a
+`.spectrum/` runtime folder:
+
+```text
+.spectrum/
+  project.specpack
+  start.cmd
+  start.ps1
+  start.command
+  start.sh
+  README.md
+  metadata.json
+```
+
+Double-click `start.cmd` on Windows or `start.command` on macOS to start the
+local project server. When served, agents can fetch the starter context bundle
+from:
 
 ```text
 http://127.0.0.1:7777/projects/repo/context
@@ -149,6 +164,22 @@ spectrum index ./docs.specpack --embed --json
 spectrum search ./docs.specpack "authentication middleware" --top 5 --json
 spectrum unpack ./docs.specpack ./docs-restored --json
 ```
+
+Guided hub workflows:
+
+```powershell
+spectrum hub -b
+spectrum hub -a
+spectrum hub -s
+spectrum hub -v
+```
+
+- `hub -b` walks through creating a portable pack, choosing where it lives,
+  adding optional files, and serving now or later.
+- `hub -a` walks through appending files or folders to an existing pack.
+- `hub -s` walks through choosing a pack and port to serve.
+- `hub -v` discovers local listening ports, reports Spectrum API servers, and
+  prints `No spectrum servers operating` when none respond.
 
 The package name is `spectrumstore`, and it exposes both `spectrum` and
 `spectrumstore` commands. It requires Node.js 18+ and Python 3.10+ on `PATH`;

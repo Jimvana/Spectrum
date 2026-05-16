@@ -35,10 +35,29 @@ spectrum search ./docs.specpack "authentication middleware" --json
 Portable project workflow:
 
 ```powershell
-spectrum project init ./my-project ./my-project.specpack --name "My Project"
-spectrum project add ./my-project.specpack ./new-notes
-spectrum project serve ./my-project.specpack --port 7777
+spectrum project init ./my-project --name "My Project"
+spectrum project add ./my-project/.spectrum/project.specpack ./new-notes
+spectrum project serve ./my-project/.spectrum/project.specpack --port 7777
 ```
+
+`project init` creates `.spectrum/project.specpack` by default, plus
+cross-platform launchers: `start.cmd`, `start.ps1`, `start.command`, and
+`start.sh`.
+
+Guided hub workflow:
+
+```powershell
+spectrum hub -b
+spectrum hub -a
+spectrum hub -s
+spectrum hub -v
+```
+
+The hub commands are interactive wrappers around `project init`, `project add`,
+and `project serve`. `hub -v` discovers local listening ports, probes them for
+the Spectrum API, and reports the dashboard and agent context URLs for running
+servers. If none respond, it prints `No spectrum servers operating`. Use
+`--ports 7777,7778` when you want to check an explicit list.
 
 If an appended source path already exists, `append` fails unless `--replace` is
 passed. Appending removes embedded `index.bin` so searches do not silently use a

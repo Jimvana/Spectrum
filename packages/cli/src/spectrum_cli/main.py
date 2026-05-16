@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
 import platform
+import subprocess
 import tempfile
 import sys
+import time
 from dataclasses import asdict, is_dataclass
+from http.client import HTTPException
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 
 SPECTRUM_BANNER = [
@@ -37,6 +43,8 @@ SPECTRUM_COLORS = [
 ]
 ANSI_RESET = "\033[0m"
 PROJECT_CONTEXT_DIR = ".spectrum-project"
+PROJECT_RUNTIME_DIR = ".spectrum"
+PROJECT_PACK_NAME = "project.specpack"
 PROJECT_CONTEXT_FILES = {
     "project.md": """# Project
 
@@ -88,6 +96,7 @@ Examples:
 - Password vault: 1Password or Bitwarden item name.
 - Env file: path on the server or local machine.
 """,
+    "ops.json": "",
     "runbook.md": """# Runbook
 
 Record common operations, troubleshooting steps, recovery commands, and checks.
@@ -166,6 +175,10 @@ def _default_pack_path(source: Path) -> Path:
     return Path.cwd() / f"{name}.specpack"
 
 
+def _default_project_pack_path(project_dir: Path) -> Path:
+    return project_dir / PROJECT_RUNTIME_DIR / PROJECT_PACK_NAME
+
+
 def _normalize_load_output(path: Path) -> Path:
     if path.suffix.lower() == ".specpack":
         return path
@@ -183,17 +196,216 @@ def _quote_command_arg(value: str | Path) -> str:
     return text
 
 
-def _write_project_templates(project_dir: Path, *, name: str, replace: bool) -> list[Path]:
-    context_dir = project_dir / PROJECT_CONTEXT_DIR
+def _split_path_list(value: str) -> list[str]:
+    return [item.strip().strip('"') for item in value.split(",") if item.strip()]
+
+
+def _port_from_endpoint(value: str) -> int | None:
+    value = value.strip()
+    if not value:
+        return None
+    if value.startswith("[") and "]:" in value:
+        value = value.rsplit("]:", 1)[1]
+    elif ":" in value:
+        value = value.rsplit(":", 1)[1]
+    elif "." in value:
+        value = value.rsplit(".", 1)[1]
+    if not value.isdigit():
+        return None
+    port = int(value)
+    return port if 0 < port < 65536 else None
+
+
+def _discover_listening_tcp_ports() -> list[int]:
+    commands = [
+        ["netstat", "-ano", "-p", "tcp"],
+        ["netstat", "-an", "-p", "tcp"],
+        ["netstat", "-ltn"],
+    ]
+    ports: set[int] = set()
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0 or not result.stdout:
+            continue
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if not parts or not parts[0].lower().startswith("tcp"):
+                continue
+            upper_line = line.upper()
+            if "LISTEN" not in upper_line and "LISTENING" not in upper_line:
+                continue
+            local = parts[1] if len(parts) > 1 and (":" in parts[1] or "." in parts[1]) else None
+            if local is None and len(parts) > 3:
+                local = parts[3]
+            port = _port_from_endpoint(local or "")
+            if port is not None:
+                ports.add(port)
+        if ports:
+            break
+    return sorted(ports)
+
+
+def _write_project_templates(context_root: Path, project_dir: Path, *, name: str, replace: bool) -> list[str]:
+    context_dir = context_root / PROJECT_CONTEXT_DIR
     context_dir.mkdir(parents=True, exist_ok=True)
-    created: list[Path] = []
+    created: list[str] = []
     for filename, template in PROJECT_CONTEXT_FILES.items():
         path = context_dir / filename
         if path.exists() and not replace:
             continue
-        path.write_text(template.format(name=name, root=project_dir.resolve()), encoding="utf-8")
-        created.append(path)
+        if filename == "ops.json":
+            content = json.dumps(
+                {
+                    "project": {
+                        "name": name,
+                        "root": str(project_dir.resolve()),
+                    },
+                    "sites": [
+                        {
+                            "name": "",
+                            "domains": [],
+                            "ssh": {
+                                "host": "",
+                                "user": "",
+                                "identity_file": "",
+                                "safe_probe": "whoami; hostname; pwd",
+                            },
+                            "deploy": {
+                                "remote_path": "",
+                                "nginx_config": "",
+                                "health_check": "",
+                            },
+                        }
+                    ],
+                    "policy": {
+                        "ssh_requires_confirmation": True,
+                        "deploy_requires_confirmation": True,
+                        "read_secrets_requires_confirmation": True,
+                        "safe_readonly_commands": ["whoami", "hostname", "pwd", "ls", "cat"],
+                    },
+                },
+                indent=2,
+            ) + "\n"
+        else:
+            content = template.format(name=name, root=project_dir.resolve())
+        path.write_text(content, encoding="utf-8")
+        created.append(f"{PROJECT_CONTEXT_DIR}/{filename}")
     return created
+
+
+def _write_project_launchers(pack_path: Path, *, name: str, port: int) -> list[Path]:
+    runtime_dir = pack_path.parent
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    pack_name = pack_path.name
+    dashboard_url = f"http://127.0.0.1:{port}/project"
+    context_url = f"http://127.0.0.1:{port}/projects/repo/context"
+    written: list[Path] = []
+
+    files = {
+        "start.ps1": f"""$ErrorActionPreference = "Stop"
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Pack = Join-Path $Root "{pack_name}"
+Write-Host "Starting Spectrum project server..."
+Write-Host "Dashboard: {dashboard_url}"
+Write-Host "Agent context: {context_url}"
+spectrum project serve "$Pack" --port {port}
+""",
+        "start.cmd": f"""@echo off
+cd /d "%~dp0"
+powershell -ExecutionPolicy Bypass -File "%~dp0start.ps1"
+pause
+""",
+        "start.command": f"""#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+echo "Starting Spectrum project server..."
+echo "Dashboard: {dashboard_url}"
+echo "Agent context: {context_url}"
+spectrum project serve "./{pack_name}" --port {port}
+echo
+read -r -p "Press enter to close..."
+""",
+        "start.sh": f"""#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+echo "Starting Spectrum project server..."
+echo "Dashboard: {dashboard_url}"
+echo "Agent context: {context_url}"
+spectrum project serve "./{pack_name}" --port {port}
+""",
+        "README.md": f"""# Spectrum Project Launcher
+
+Project: {name}
+
+This folder contains the portable Spectrum project pack and launchers.
+
+## Start The Local Server
+
+Windows:
+
+```text
+Double-click start.cmd
+```
+
+PowerShell:
+
+```powershell
+.\\start.ps1
+```
+
+macOS:
+
+```text
+Double-click start.command
+```
+
+Linux:
+
+```bash
+./start.sh
+```
+
+## URLs
+
+- Dashboard: {dashboard_url}
+- Agent context: {context_url}
+
+The pack file is `{pack_name}`.
+""",
+        "metadata.json": json.dumps(
+            {
+                "name": name,
+                "pack": pack_name,
+                "port": port,
+                "dashboard_url": dashboard_url,
+                "context_url": context_url,
+                "launcher_version": 1,
+            },
+            indent=2,
+        )
+        + "\n",
+    }
+
+    for filename, content in files.items():
+        path = runtime_dir / filename
+        path.write_text(content, encoding="utf-8", newline="\n")
+        if filename in {"start.command", "start.sh"}:
+            try:
+                path.chmod(path.stat().st_mode | 0o111)
+            except OSError:
+                pass
+        written.append(path)
+    return written
 
 
 def command_encode(args: argparse.Namespace) -> int:
@@ -304,8 +516,66 @@ def command_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _running_server_info(host: str, port: int) -> dict | None:
+    base = f"http://{host}:{port}"
+    try:
+        with urlopen(f"{base}/health", timeout=1.0) as response:
+            health = json.loads(response.read().decode("utf-8"))
+        with urlopen(f"{base}/packs", timeout=1.0) as response:
+            packs = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+    return {
+        "base_url": base,
+        "health": health,
+        "packs": packs.get("packs", []),
+        "dashboard_url": f"{base}/project",
+        "context_url": f"{base}/projects/repo/context",
+    }
+
+
+def _shutdown_running_server(host: str, port: int, *, timeout: float = 5.0) -> dict | None:
+    base = f"http://{host}:{port}"
+    try:
+        request = Request(f"{base}/shutdown", method="POST")
+        with urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, TimeoutError, HTTPException, json.JSONDecodeError):
+        return None
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _running_server_info(host, port) is None:
+            return payload
+        time.sleep(0.1)
+    return payload
+
+
 def command_serve(args: argparse.Namespace) -> int:
     from spectrum_server.app import ApiError, PackRegistry, run_server
+
+    requested_paths: list[Path] = []
+    if args.specpack:
+        requested_paths.append(Path(args.specpack).expanduser())
+    for value in args.pack:
+        path_value = value.split("=", 1)[1] if "=" in value else value
+        requested_paths.append(Path(path_value).expanduser())
+
+    running = _running_server_info(args.host, args.port)
+    if running is not None:
+        requested = {str(path.resolve()) for path in requested_paths}
+        served = {str(Path(pack_info["path"]).resolve()) for pack_info in running["packs"]}
+        if requested and requested <= served:
+            print(f"spectrum serve already running on {running['base_url']}", file=sys.stderr)
+            print(f"project dashboard: {running['dashboard_url']}", file=sys.stderr)
+            print(f"agent context: {running['context_url']}", file=sys.stderr)
+            return 0
+        served_list = ", ".join(sorted(served)) or "no registered packs"
+        requested_list = ", ".join(sorted(requested)) or "no requested packs"
+        raise ValueError(
+            f"port {args.port} already has a Spectrum server running for {served_list}; "
+            f"requested {requested_list}. Stop the existing server or choose another port."
+        )
 
     registry = PackRegistry()
     try:
@@ -332,7 +602,7 @@ def command_serve(args: argparse.Namespace) -> int:
 
 
 def command_project_init(args: argparse.Namespace) -> int:
-    from spectrum_core import pack, verify_pack
+    from spectrum_core import append_to_pack, pack, verify_pack
     from spectrum_index import build_index
 
     project_dir = Path(args.source).expanduser()
@@ -340,18 +610,45 @@ def command_project_init(args: argparse.Namespace) -> int:
         raise ValueError("project source must be a directory")
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    output = _normalize_load_output(Path(args.output).expanduser()) if args.output else _default_pack_path(project_dir)
+    output = _normalize_load_output(Path(args.output).expanduser()) if args.output else _default_project_pack_path(project_dir)
     name = args.name or project_dir.resolve().name
-    created = _write_project_templates(project_dir, name=name, replace=args.replace_template)
-    pack_summary = pack(
-        project_dir,
-        output,
-        include_all=args.all,
-        language=args.language,
-        rle=args.rle,
-        zlib_level=args.zlib_level,
-        verbose=args.verbose,
-    )
+    with tempfile.TemporaryDirectory(prefix="spectrum-project-context-") as tmp_name:
+        context_root = Path(tmp_name)
+        created = _write_project_templates(context_root, project_dir, name=name, replace=True)
+        try:
+            pack_summary = pack(
+                project_dir,
+                output,
+                include_all=args.all,
+                language=args.language,
+                rle=args.rle,
+                zlib_level=args.zlib_level,
+                verbose=args.verbose,
+            )
+            pack_summary = append_to_pack(
+                output,
+                context_root,
+                include_all=True,
+                replace=True,
+                language=args.language,
+                rle=args.rle,
+                zlib_level=args.zlib_level,
+                verbose=args.verbose,
+            )
+            pack_summary["context_entries"] = len(created)
+        except ValueError as exc:
+            if "no encodable files found" not in str(exc):
+                raise
+            pack_summary = pack(
+                context_root,
+                output,
+                include_all=True,
+                language=args.language,
+                rle=args.rle,
+                zlib_level=args.zlib_level,
+                verbose=args.verbose,
+            )
+    launchers = _write_project_launchers(output, name=name, port=args.port)
     verify_report = verify_pack(output).to_dict()
     index_summary = None
     if not args.no_index:
@@ -362,22 +659,26 @@ def command_project_init(args: argparse.Namespace) -> int:
         "project": str(project_dir.resolve()),
         "name": name,
         "pack": str(output.resolve()),
-        "context_dir": str((project_dir / PROJECT_CONTEXT_DIR).resolve()),
-        "created_files": [str(path.resolve()) for path in created],
+        "context_dir": PROJECT_CONTEXT_DIR,
+        "created_files": created,
+        "launcher_files": [str(path.resolve()) for path in launchers],
         "pack_summary": pack_summary,
         "verify": verify_report,
         "index": index_summary,
         "serve_command": f"spectrum project serve {_quote_command_arg(output)} --port {args.port}",
+        "dashboard_url": f"http://127.0.0.1:{args.port}/project",
         "context_endpoint": f"http://127.0.0.1:{args.port}/projects/repo/context",
     }
     if args.json:
         emit(payload, as_json=True)
     else:
         print(f"Project pack ready: {output}")
-        print(f"Context files: {project_dir / PROJECT_CONTEXT_DIR}")
+        print(f"Context files: embedded at {PROJECT_CONTEXT_DIR}/")
+        print(f"Launchers: {output.parent}")
         print(f"Verify: {'valid' if verify_report.get('valid') else 'failed'}")
         if index_summary:
             print("Search index: embedded")
+        print(f"Dashboard: {payload['dashboard_url']}")
         print(f"Serve it with: {payload['serve_command']}")
         print(f"Agent context: {payload['context_endpoint']}")
     return 0 if verify_report.get("valid") else 1
@@ -416,8 +717,195 @@ def command_project_serve(args: argparse.Namespace) -> int:
     return command_serve(argparse.Namespace(specpack=args.pack, pack=[], host=args.host, port=args.port, quiet=args.quiet))
 
 
+def command_project_restart(args: argparse.Namespace) -> int:
+    pack_path = Path(args.pack).expanduser().resolve()
+    running = _running_server_info(args.host, args.port)
+    if running is not None:
+        served = {str(Path(pack_info["path"]).resolve()) for pack_info in running["packs"]}
+        requested = str(pack_path)
+        if served and requested not in served and not args.force:
+            served_list = ", ".join(sorted(served))
+            raise ValueError(
+                f"port {args.port} is serving {served_list}; "
+                "use --force to restart it with a different pack."
+            )
+        stopped = _shutdown_running_server(args.host, args.port, timeout=args.timeout)
+        if stopped is None:
+            raise ValueError(f"could not stop Spectrum server on http://{args.host}:{args.port}")
+        print(f"stopped Spectrum server on http://{args.host}:{args.port}", file=sys.stderr)
+
+    if args.no_start:
+        return 0
+
+    return command_project_serve(argparse.Namespace(pack=str(pack_path), host=args.host, port=args.port, quiet=args.quiet))
+
+
 def command_project(args: argparse.Namespace) -> int:
-    print("Use a project subcommand: init, add, or serve")
+    print("Use a project subcommand: init, add, serve, or restart")
+    return 0
+
+
+def command_hub(args: argparse.Namespace) -> int:
+    if args.build:
+        return command_hub_build(args)
+    if args.append:
+        return command_hub_append(args)
+    if args.serve:
+        return command_hub_serve(args)
+    if args.verify_servers:
+        return command_hub_verify(args)
+    print("Use one hub action: -b build, -a append, -s serve, or -v verify servers")
+    return 0
+
+
+def command_hub_build(args: argparse.Namespace) -> int:
+    print("Spectrum Hub: build a portable project pack")
+    project_text = args.source or _prompt("Project folder/location", ".")
+    project_dir = Path(project_text).expanduser()
+    default_name = project_dir.resolve().name if project_dir.exists() else project_dir.name or "project"
+    name = args.name or _prompt("Specpack/project name", default_name)
+    default_pack = _default_project_pack_path(project_dir)
+    pack_text = args.pack or _prompt("Specpack path", str(default_pack))
+    if args.input is not None:
+        extra_text = args.input
+    elif args.yes or args.no_serve:
+        extra_text = ""
+    else:
+        extra_text = _prompt("Extra files or folders to add, comma-separated", "")
+    port = args.port or 7777
+
+    init_code = command_project_init(
+        argparse.Namespace(
+            source=str(project_dir),
+            output=pack_text,
+            name=name,
+            replace_template=False,
+            no_index=False,
+            port=port,
+            all=args.all,
+            language=args.language,
+            rle=args.rle,
+            zlib_level=args.zlib_level,
+            verbose=args.verbose,
+            json=args.json,
+        )
+    )
+    if init_code:
+        return init_code
+
+    for item in _split_path_list(extra_text):
+        add_code = command_project_add(
+            argparse.Namespace(
+                pack=pack_text,
+                input=item,
+                replace=False,
+                no_index=False,
+                all=args.all,
+                language=args.language,
+                rle=args.rle,
+                zlib_level=args.zlib_level,
+                verbose=args.verbose,
+                json=args.json,
+            )
+        )
+        if add_code:
+            return add_code
+
+    if args.no_serve:
+        print(f"Start it later with: spectrum project serve {_quote_command_arg(pack_text)} --port {port}")
+        return 0
+    if args.yes or _confirm("Serve this project now?", default=True):
+        return command_project_serve(argparse.Namespace(pack=pack_text, host=args.host, port=port, quiet=False))
+    print(f"Start it later with: spectrum project serve {_quote_command_arg(pack_text)} --port {port}")
+    return 0
+
+
+def command_hub_append(args: argparse.Namespace) -> int:
+    print("Spectrum Hub: append files to a portable project pack")
+    pack_text = args.pack or _prompt("Specpack path", str(_default_project_pack_path(Path.cwd())))
+    input_text = args.input or _prompt("Files or folders to add, comma-separated", "")
+    if not input_text:
+        raise ValueError("at least one file or folder is required")
+    for item in _split_path_list(input_text):
+        code = command_project_add(
+            argparse.Namespace(
+                pack=pack_text,
+                input=item,
+                replace=args.replace,
+                no_index=False,
+                all=args.all,
+                language=args.language,
+                rle=args.rle,
+                zlib_level=args.zlib_level,
+                verbose=args.verbose,
+                json=args.json,
+            )
+        )
+        if code:
+            return code
+    return 0
+
+
+def command_hub_serve(args: argparse.Namespace) -> int:
+    print("Spectrum Hub: serve a portable project pack")
+    pack_text = args.pack or _prompt("Specpack path", str(_default_project_pack_path(Path.cwd())))
+    port_text = str(args.port) if args.port is not None else _prompt("Port", "7777")
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ValueError(f"invalid port: {port_text}") from exc
+    return command_project_serve(argparse.Namespace(pack=pack_text, host=args.host, port=port, quiet=False))
+
+
+def _probe_spectrum_server(host: str, port: int, timeout: float) -> dict[str, object]:
+    base = f"http://{host}:{port}"
+    server_info: dict[str, object] = {"port": port, "base_url": base, "running": False}
+    try:
+        with urlopen(f"{base}/health", timeout=timeout) as response:
+            health = json.loads(response.read().decode("utf-8"))
+        with urlopen(f"{base}/packs", timeout=timeout) as response:
+            packs = json.loads(response.read().decode("utf-8"))
+        server_info.update(
+            {
+                "running": True,
+                "health": health,
+                "packs": packs.get("packs", []),
+                "dashboard_url": f"{base}/project",
+                "context_url": f"{base}/projects/repo/context",
+            }
+        )
+    except (OSError, URLError, TimeoutError, HTTPException, json.JSONDecodeError) as exc:
+        server_info["error"] = str(exc)
+    return server_info
+
+
+def command_hub_verify(args: argparse.Namespace) -> int:
+    ports = (
+        [int(value.strip()) for value in str(args.ports).split(",") if value.strip()]
+        if args.ports
+        else _discover_listening_tcp_ports()
+    )
+    if ports:
+        workers = min(32, len(ports))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            servers = list(executor.map(lambda port: _probe_spectrum_server(args.host, port, args.timeout), ports))
+    else:
+        servers = []
+
+    payload = {"servers": servers, "running": [server for server in servers if server["running"]]}
+    if args.json:
+        emit(payload, as_json=True)
+    else:
+        if not payload["running"]:
+            print("No spectrum servers operating")
+            return 0
+        for server in servers:
+            if server["running"]:
+                print(f"[ok] {server['base_url']}")
+                print(f"     dashboard: {server['dashboard_url']}")
+                print(f"     context: {server['context_url']}")
+                for pack_info in server.get("packs", []):
+                    print(f"     pack {pack_info['id']}: {pack_info['path']}")
     return 0
 
 
@@ -745,6 +1233,37 @@ def build_parser() -> argparse.ArgumentParser:
     project_serve.add_argument("--port", type=int, default=7777)
     project_serve.add_argument("--quiet", action="store_true")
     project_serve.set_defaults(func=command_project_serve)
+
+    project_restart = project_sub.add_parser("restart", help="Restart a local portable project server")
+    project_restart.add_argument("pack", help="Existing .specpack to serve as pack id 'repo'")
+    project_restart.add_argument("--host", default="127.0.0.1")
+    project_restart.add_argument("--port", type=int, default=7777)
+    project_restart.add_argument("--quiet", action="store_true")
+    project_restart.add_argument("--timeout", type=float, default=5.0, help="Seconds to wait for the old server to stop")
+    project_restart.add_argument("--force", action="store_true", help="Restart even if the port is serving a different pack")
+    project_restart.add_argument("--no-start", action="store_true", help="Stop the old server and exit without starting a new one")
+    project_restart.set_defaults(func=command_project_restart)
+
+    hub = sub.add_parser("hub", help="Guided portable project hub")
+    hub_actions = hub.add_mutually_exclusive_group()
+    hub_actions.add_argument("-b", "--build", action="store_true", help="Walk through building a project specpack")
+    hub_actions.add_argument("-a", "--append", action="store_true", help="Walk through appending files to a specpack")
+    hub_actions.add_argument("-s", "--serve", action="store_true", help="Walk through serving a specpack")
+    hub_actions.add_argument("-v", "--verify-servers", action="store_true", help="Find running local Spectrum API servers")
+    hub.add_argument("--name", help="Project/specpack name for build mode")
+    hub.add_argument("--source", help="Project folder/location for build mode")
+    hub.add_argument("--pack", help="Specpack path")
+    hub.add_argument("--input", help="Extra files or folders, comma-separated")
+    hub.add_argument("--host", default="127.0.0.1")
+    hub.add_argument("--port", type=int, default=None)
+    hub.add_argument("--ports", default=None, help="Comma-separated ports for -v; default discovers local listening ports")
+    hub.add_argument("--timeout", type=float, default=1.0, help="Per-port timeout for -v")
+    hub.add_argument("--replace", action="store_true", help="Replace existing source paths when appending")
+    hub.add_argument("--yes", "-y", action="store_true", help="Accept prompts where possible")
+    hub.add_argument("--no-serve", action="store_true", help="Build only and print the serve command")
+    hub.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    add_common_codec_options(hub)
+    hub.set_defaults(func=command_hub)
 
     load = sub.add_parser("load", help="Guided walkthrough for pack and local serve")
     load.add_argument("source", nargs="?", help="Repo or folder to pack")

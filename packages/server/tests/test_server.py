@@ -68,6 +68,17 @@ def test_server_pack_lifecycle(tmp_path: Path) -> None:
         assert status == 200
         assert searched["results"][0]["path"].endswith("note.md.spec")
         assert searched["results"][0]["source_path"] == "note.md"
+        assert searched["results"][0]["hydrate_url"] == "/packs/docs/documents/note.md"
+
+        status, manifest = request(port, "GET", "/packs/docs/manifest")
+        assert status == 200
+        assert manifest["id"] == "docs"
+        assert manifest["documents"][0]["source_path"] == "note.md"
+        assert manifest["documents"][0]["hydrate_url"] == "/packs/docs/documents/note.md"
+
+        status, documents = request(port, "GET", "/packs/docs/documents")
+        assert status == 200
+        assert documents["documents"][0]["source_path"] == "note.md"
 
         decoded = tmp_path / "decoded"
         status, unpacked = request(port, "POST", "/packs/docs/unpack", {"output_dir": str(decoded)})
@@ -123,6 +134,26 @@ def test_server_builds_project_context_bundle(tmp_path: Path) -> None:
     (context / "project.md").write_text("# Project\n\nByteSpectrum site.\n", encoding="utf-8")
     (context / "deploy.md").write_text("# Deploy\n\nRun the production deploy check.\n", encoding="utf-8")
     (context / "secrets.refs.md").write_text("# Secret References\n\nUse ssh-agent.\n", encoding="utf-8")
+    (context / "ops.json").write_text(
+        json.dumps(
+            {
+                "sites": [
+                    {
+                        "name": "bytespectrum",
+                        "domains": ["bytespectrum.cc"],
+                        "ssh": {
+                            "host": "145.241.234.63",
+                            "user": "ubuntu",
+                            "identity_file": "C:\\Users\\james\\.ssh\\spectrum_oci_ed25519",
+                        },
+                        "deploy": {"remote_path": "/var/www/spectrum"},
+                    }
+                ],
+                "policy": {"ssh_requires_confirmation": True, "deploy_requires_confirmation": True},
+            }
+        ),
+        encoding="utf-8",
+    )
     pack_path = tmp_path / "project.specpack"
     pack(docs, pack_path)
 
@@ -142,10 +173,130 @@ def test_server_builds_project_context_bundle(tmp_path: Path) -> None:
         assert "ssh-agent" in context_bundle["secret_references"]
         assert "status.md" in context_bundle["missing"]
         assert context_bundle["documents"][0]["path"] == ".spectrum-project/project.md"
+        assert context_bundle["ops"]["data"]["sites"][0]["name"] == "bytespectrum"
+        assert context_bundle["readiness"]["ssh"]["ready"]
+
+        status, ops = request(port, "GET", "/projects/repo/ops")
+        assert status == 200
+        assert ops["path"] == ".spectrum-project/ops.json"
+        assert ops["data"]["sites"][0]["ssh"]["user"] == "ubuntu"
+
+        status, readiness = request(port, "GET", "/projects/repo/readiness")
+        assert status == 200
+        assert readiness["deploy"]["ready"]
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_server_upserts_document_into_served_pack(tmp_path: Path) -> None:
+    docs = tmp_path / "project"
+    docs.mkdir()
+    (docs / "project.md").write_text("# Project\n\nServed pack update.\n", encoding="utf-8")
+    pack_path = tmp_path / "project.specpack"
+    pack(docs, pack_path)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    ops = {
+        "sites": [
+            {
+                "name": "bytespectrum",
+                "ssh": {
+                    "host": "145.241.234.63",
+                    "user": "ubuntu",
+                    "identity_file": "C:\\Users\\james\\.ssh\\spectrum_oci_ed25519",
+                },
+                "deploy": {"remote_path": "/var/www/spectrum"},
+            }
+        ],
+        "policy": {"ssh_requires_confirmation": True, "deploy_requires_confirmation": True},
+    }
+
+    try:
+        status, updated = request(
+            port,
+            "POST",
+            "/packs/repo/documents",
+            {
+                "source_path": ".spectrum-project/ops.json",
+                "content": json.dumps(ops),
+                "replace": True,
+                "rebuild_index": False,
+            },
+        )
+        assert status == 200
+        assert updated["verify"]["valid"]
+        assert updated["document"]["path"] == ".spectrum-project/ops.json"
+
+        status, hydrated = request(port, "GET", "/packs/repo/documents/.spectrum-project/ops.json")
+        assert status == 200
+        assert json.loads(hydrated["content"])["sites"][0]["name"] == "bytespectrum"
+
+        status, live_ops = request(port, "GET", "/projects/repo/ops")
+        assert status == 200
+        assert live_ops["missing"] is False
+        assert live_ops["data"]["sites"][0]["ssh"]["user"] == "ubuntu"
+
+        status, readiness = request(port, "GET", "/projects/repo/readiness")
+        assert status == 200
+        assert readiness["ssh"]["ready"]
+        assert readiness["deploy"]["ready"]
+
+        status, deleted = request(
+            port,
+            "DELETE",
+            "/packs/repo/documents/.spectrum-project/ops.json",
+            {"rebuild_index": False},
+        )
+        assert status == 200
+        assert deleted["removed"]
+        assert deleted["archived_to"] == ".spectrum-trash/trash.jsonl"
+        assert deleted["verify"]["valid"]
+
+        status, deleted_ops = request(port, "GET", "/projects/repo/ops")
+        assert status == 200
+        assert deleted_ops["missing"] is True
+
+        status, trash = request(port, "GET", "/packs/repo/documents/.spectrum-trash/trash.jsonl")
+        assert status == 200
+        records = [json.loads(line) for line in trash["content"].splitlines() if line]
+        assert records[-1]["source_path"] == ".spectrum-project/ops.json"
+        assert json.loads(records[-1]["content"])["sites"][0]["name"] == "bytespectrum"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_shutdown_endpoint_stops_server(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("Shutdown test.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(docs, pack_path)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        status, shutdown = request(port, "POST", "/shutdown")
+        assert status == 200
+        assert shutdown["status"] == "shutting_down"
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    finally:
+        server.server_close()
 
 
 def test_server_serves_project_dashboard(tmp_path: Path) -> None:
