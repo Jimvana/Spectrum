@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spectrum</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Spectrum Store Developer Preview</p>
+        <h1>Turn any repo into a local searchable memory in minutes.</h1>
+        <p class="lede">
+          Install the CLI, run the guided walkthrough, and get a compact
+          lossless <code>.specpack</code> served through a local HTTP API for
+          agents, apps, and RAG workflows.
+        </p>
+        <pre class="hero-command"><code>npm install -g spectrumstore
+spectrum load</code></pre>
+        <div class="actions">
+          <a href="#walkthrough">Start The Walkthrough</a>
+          <a href="/benchmarks/">Benchmark HUD</a>
+          <a href="https://github.com/Jimvana/Spectrum">GitHub</a>
+        </div>
+      </section>
+
+      <section class="quickstart" id="walkthrough">
+        <div>
+          <p class="eyebrow">Turnkey Install</p>
+          <h2>One install, guided local serving</h2>
+          <p>
+            <code>spectrum load</code> checks the install, packs your repo,
+            verifies the output, and starts the local Spectrum HTTP API. Use
+            <code>spectrum demo</code> from the legacy benchmark CLI when you
+            want the full retrieval comparison walkthrough.
+          </p>
+        </div>
+        <pre><code>npm install -g spectrumstore
+spectrum load ./my-repo ./my-repo.specpack --yes
+
+# Local API
+curl http://127.0.0.1:7777/health
+curl http://127.0.0.1:7777/packs</code></pre>
+      </section>
+
+      <section class="hub">
+        <div class="hub-copy">
+          <p class="eyebrow">Spectrum Hub</p>
+          <h2>A guided control plane for portable project context</h2>
+          <p>
+            Spectrum Hub wraps the project workflow into simple guided commands
+            for building, appending, serving, and verifying local
+            <code>.specpack</code> stores. It helps an AI agent start from the
+            live project API instead of guessing from loose files: discover the
+            running pack, read the manifest, pull agent context, check ops
+            readiness, search for the right note, and hydrate exact source only
+            when it is needed.
+          </p>
+          <p>
+            In practice that gives agents like Codex a cleaner workflow:
+            project rules, deployment facts, SSH policy, and safety flags travel
+            inside the pack, while the local HTTP API exposes the same
+            authoritative context to every tool in the loop.
+          </p>
+        </div>
+        <div class="hub-commands">
+          <div><code>spectrum hub -b</code><span>Build a portable pack.</span></div>
+          <div><code>spectrum hub -a</code><span>Append new project context.</span></div>
+          <div><code>spectrum hub -s</code><span>Serve the pack locally.</span></div>
+          <div><code>spectrum hub -v</code><span>Verify running APIs and agent URLs.</span></div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article>
+          <h2>Single Artifact</h2>
+          <p>
+            The compressed pack and retrieval representation are designed to
+            travel together, instead of keeping raw chunks and a separate search
+            store as the source of truth.
+          </p>
+        </article>
+        <article>
+          <h2>Exact Source</h2>
+          <p>
+            Packs are deterministic and lossless, so selected context can
+            hydrate back into byte-for-byte source rather than approximate
+            snippets.
+          </p>
+        </article>
+        <article>
+          <h2>Agent Ready</h2>
+          <p>
+            Serve a pack locally, search it over HTTP, and give agents exact
+            code context without shipping your repo to a hosted vector store.
+          </p>
+        </article>
+      </section>
+
+      <section class="developer-path">
+        <div>
+          <p class="eyebrow">Developer Flow</p>
+          <h2>From repo to local API</h2>
+        </div>
+        <ol>
+          <li><strong>Install</strong><span>Get the npm CLI with bundled Spectrum runtime.</span></li>
+          <li><strong>Load</strong><span>Point Spectrum at a local repo or folder.</span></li>
+          <li><strong>Serve</strong><span>Start the local API at <code>127.0.0.1:7777</code>.</span></li>
+          <li><strong>Integrate</strong><span>Search, hydrate, verify, and unpack from tools or agents.</span></li>
+        </ol>
+      </section>
+
+      <section class="signal">
+        <p class="eyebrow">Current Benchmark Signal</p>
+        <h2>Large-corpus serving profile</h2>
+        <dl>
+          <div><dt>Corpus</dt><dd>72,601 documents</dd></div>
+          <div><dt>Raw bytes</dt><dd>1.03 GB</dd></div>
+          <div><dt>Compact store</dt><dd>0.3585x raw</dd></div>
+          <div><dt>Serving footprint</dt><dd>0.4882x raw</dd></div>
+          <div><dt>MRR</dt><dd>0.8625</dd></div>
+          <div><dt>Recall@5</dt><dd>0.8750</dd></div>
+          <div><dt>Avg E2E</dt><dd>4.78 ms</dd></div>
+          <div><dt>P95 E2E</dt><dd>6.35 ms</dd></div>
+        </dl>
+      </section>
+    </main>
+  </body>
+</html>
