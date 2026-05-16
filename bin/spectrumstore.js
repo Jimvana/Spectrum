@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawnSync } = require("node:child_process");
+const { spawn } = require("node:child_process");
 const { delimiter, join } = require("node:path");
 
 const root = join(__dirname, "..");
@@ -35,18 +35,65 @@ const candidates = process.platform === "win32"
       { command: "py", args: ["-3", ...moduleArgs] },
     ];
 
-let lastError = null;
-for (const candidate of candidates) {
-  const result = spawnSync(candidate.command, candidate.args, { stdio: "inherit", env });
-  if (!result.error) {
-    process.exit(result.status ?? 1);
-  }
-  lastError = result.error;
-  if (result.error.code !== "ENOENT") {
-    break;
-  }
+const signalExitCodes = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+function runCandidate(candidate) {
+  return new Promise((resolve) => {
+    const child = spawn(candidate.command, candidate.args, { stdio: "inherit", env });
+    const cleanup = [];
+
+    const removeHandlers = () => {
+      for (const remove of cleanup) {
+        remove();
+      }
+    };
+
+    for (const signal of Object.keys(signalExitCodes)) {
+      const handler = () => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill(signal);
+          return;
+        }
+        process.exit(signalExitCodes[signal]);
+      };
+      process.on(signal, handler);
+      cleanup.push(() => process.off(signal, handler));
+    }
+
+    child.once("error", (error) => {
+      removeHandlers();
+      resolve({ error });
+    });
+    child.once("exit", (status, signal) => {
+      removeHandlers();
+      resolve({ status, signal });
+    });
+  });
 }
 
-console.error(`spectrumstore: failed to start Python: ${lastError ? lastError.message : "unknown error"}`);
-console.error("spectrumstore: install Python 3.10+ or make sure it is available on PATH.");
-process.exit(1);
+async function main() {
+  let lastError = null;
+  for (const candidate of candidates) {
+    const result = await runCandidate(candidate);
+    if (!result.error) {
+      if (result.signal) {
+        process.exit(signalExitCodes[result.signal] ?? 1);
+      }
+      process.exit(result.status ?? 1);
+    }
+    lastError = result.error;
+    if (result.error.code !== "ENOENT") {
+      break;
+    }
+  }
+
+  console.error(`spectrumstore: failed to start Python: ${lastError ? lastError.message : "unknown error"}`);
+  console.error("spectrumstore: install Python 3.10+ or make sure it is available on PATH.");
+  process.exit(1);
+}
+
+main();
