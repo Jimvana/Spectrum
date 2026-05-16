@@ -243,14 +243,14 @@ def decode_file(spec_path: str, output_path: str) -> dict:
 
     # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(source, encoding="utf-8")
+    output_path.write_bytes(source.encode("utf-8"))
 
     length_ok = (decoded_length == orig_length)
-    fidelity  = "✓ perfect" if (length_ok and cksum_ok) else "✗ mismatch"
+    fidelity  = "perfect" if (length_ok and cksum_ok) else "mismatch"
 
-    print(f"[spec_dec] Decoded {len(tokens):,} tokens → {decoded_length:,} bytes  "
-          f"checksum {'✓' if cksum_ok else '✗'}  [{fidelity}]{compat_note}")
-    print(f"[spec_dec] Saved → {output_path.name}")
+    print(f"[spec_dec] Decoded {len(tokens):,} tokens -> {decoded_length:,} bytes  "
+          f"checksum {'ok' if cksum_ok else 'failed'}  [{fidelity}]{compat_note}")
+    print(f"[spec_dec] Saved -> {output_path.name}")
 
     return {
         "spec_path":       str(spec_path),

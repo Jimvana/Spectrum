@@ -95,6 +95,31 @@ _IMPLEMENTATION_INTENT_TERMS = {
 }
 _PACKAGING_INTENT_TERMS = {"setup", "entry", "point", "cli", "command", "pyproject", "script", "scripts"}
 _GITHUB_INTENT_TERMS = {"github", "issue", "pull", "workflow", "ci", "template", "action", "actions"}
+_CONFIG_DOC_EXTENSIONS = {".md", ".json", ".yaml", ".yml", ".toml"}
+_CONFIG_DOC_FILENAMES = {
+    ".mcp.json",
+    "docker-compose.yml",
+    "hooks.codex.json",
+    "hooks.json",
+    "package.json",
+    "plugin.json",
+}
+_GENERIC_DOC_FILENAMES = {"changelog.md", "contributing.md", "readme.md", "roadmap.md"}
+_GENERIC_DOC_INTENT_TERMS = {"changelog", "changes", "contributing", "readme", "roadmap"}
+_ADVISORY_INTENT_TERMS = {"advisory", "cve", "xss", "traversal", "vulnerability"}
+_ENV_DISAMBIGUATION_TERMS = {
+    "dev",
+    "development",
+    "lite",
+    "local",
+    "memory",
+    "prod",
+    "production",
+    "root",
+    "staging",
+}
+_NESTED_PATH_INTENT_TERMS = {"app", "src", "tauri", "src-tauri", "nested", "package", "workspace"}
+_ROOT_CONFIG_FILENAMES = {"cargo.toml", "package.json", "pyproject.toml", "tsconfig.json"}
 _RERANK_STOPWORDS = {
     "a",
     "an",
@@ -196,43 +221,94 @@ def _is_codey_query_token(token: str) -> bool:
 
 @dataclass(frozen=True)
 class CodeRerankProfile:
+    mode: str = "base"
     candidates: int = DEFAULT_RERANK_CANDIDATES
     identifier_boost: float = DEFAULT_IDENTIFIER_BOOST
     path_boost: float = DEFAULT_PATH_BOOST
+    filename_boost: float = 0.6
+    exact_stem_boost: float = 0.0
+    config_doc_boost: float = 0.0
+    dotfile_boost: float = 0.0
+    source_path_boost: float = 0.0
+    benchmark_penalty: float = 0.0
+    env_match_boost: float = 0.0
+    env_mismatch_penalty: float = 0.0
+    root_config_boost: float = 0.0
+    nested_config_penalty: float = 0.0
+    specific_term_mismatch_penalty: float = 0.0
+    generic_doc_penalty: float = 0.0
     structure_boost: float = DEFAULT_STRUCTURE_BOOST
     proximity_boost: float = DEFAULT_PROXIMITY_BOOST
     intent_path_boost: float = 4.0
     metadata_penalty: float = 2.0
 
 
-def code_rerank_profile(name: str, candidates: int | None = None) -> CodeRerankProfile | None:
+def coderag_rerank_profile(name: str, candidates: int | None = None) -> CodeRerankProfile | None:
+    base = {
+        "mode": "coderag",
+        "identifier_boost": DEFAULT_IDENTIFIER_BOOST,
+        "path_boost": DEFAULT_PATH_BOOST,
+        "filename_boost": 2.8,
+        "exact_stem_boost": 5.0,
+        "config_doc_boost": 5.0,
+        "dotfile_boost": 5.0,
+        "source_path_boost": 3.0,
+        "benchmark_penalty": 3.0,
+        "env_match_boost": 4.0,
+        "env_mismatch_penalty": 4.0,
+        "root_config_boost": 4.0,
+        "nested_config_penalty": 3.0,
+        "specific_term_mismatch_penalty": 3.0,
+        "generic_doc_penalty": 4.0,
+        "structure_boost": DEFAULT_STRUCTURE_BOOST,
+        "proximity_boost": DEFAULT_PROXIMITY_BOOST,
+        "intent_path_boost": 4.0,
+        "metadata_penalty": 2.0,
+    }
     profiles = {
         "off": None,
         "none": None,
-        "fast": CodeRerankProfile(candidates=10),
-        "balanced": CodeRerankProfile(candidates=25),
-        "accurate": CodeRerankProfile(candidates=50),
-        "quality": CodeRerankProfile(candidates=50),
+        "fast": CodeRerankProfile(candidates=10, **base),
+        "balanced": CodeRerankProfile(candidates=25, **base),
+        "accurate": CodeRerankProfile(candidates=50, **base),
+        "quality": CodeRerankProfile(candidates=50, **base),
     }
     key = name.lower()
     if key not in profiles:
-        raise ValueError(f"Unknown code rerank profile: {name}")
+        raise ValueError(f"Unknown CodeRAG rerank profile: {name}")
     profile = profiles[key]
     if candidates is None:
         return profile
     if candidates <= 0:
         return None
     if profile is None:
-        return CodeRerankProfile(candidates=candidates)
+        return CodeRerankProfile(candidates=candidates, **base)
     return CodeRerankProfile(
+        mode=profile.mode,
         candidates=candidates,
         identifier_boost=profile.identifier_boost,
         path_boost=profile.path_boost,
+        filename_boost=profile.filename_boost,
+        exact_stem_boost=profile.exact_stem_boost,
+        config_doc_boost=profile.config_doc_boost,
+        dotfile_boost=profile.dotfile_boost,
+        source_path_boost=profile.source_path_boost,
+        benchmark_penalty=profile.benchmark_penalty,
+        env_match_boost=profile.env_match_boost,
+        env_mismatch_penalty=profile.env_mismatch_penalty,
+        root_config_boost=profile.root_config_boost,
+        nested_config_penalty=profile.nested_config_penalty,
+        specific_term_mismatch_penalty=profile.specific_term_mismatch_penalty,
+        generic_doc_penalty=profile.generic_doc_penalty,
         structure_boost=profile.structure_boost,
         proximity_boost=profile.proximity_boost,
         intent_path_boost=profile.intent_path_boost,
         metadata_penalty=profile.metadata_penalty,
     )
+
+
+def code_rerank_profile(name: str, candidates: int | None = None) -> CodeRerankProfile | None:
+    return coderag_rerank_profile(name, candidates)
 
 
 class CodeSignalReranker:
@@ -245,14 +321,52 @@ class CodeSignalReranker:
         self.profile = profile
         self.fields_by_id: dict[int, dict[str, set[str]]] = {}
         self.positions_by_id: dict[int, dict[str, list[int]]] = {}
+        self.source_path_by_id: dict[int, str] = {}
         for doc in documents:
             doc_id = int(doc["id"])
             text = text_by_id.get(doc_id, "")
+            self.source_path_by_id[doc_id] = str(doc.get("source_path", doc.get("title", "")))
             self.fields_by_id[doc_id] = _field_tokens(doc, text)
             self.positions_by_id[doc_id] = _term_positions(text)
 
     def score(self, doc_id: int, query_terms: set[str]) -> float:
         return sum(self.score_breakdown(doc_id, query_terms).values())
+
+    def _path_depth(self, doc_id: int) -> int:
+        source_path = self.source_path_by_id.get(doc_id, "")
+        return max(0, len(Path(source_path).parts) - 1)
+
+    def _filename_terms(self, doc_id: int) -> set[str]:
+        source_path = self.source_path_by_id.get(doc_id, "")
+        path = Path(source_path)
+        return set(_split_code_words(path.name))
+
+    def _specific_query_terms(self, query_terms: set[str]) -> set[str]:
+        return {
+            term
+            for term in query_terms
+            if len(term) >= 4 and term not in _RERANK_STOPWORDS and term not in _IMPLEMENTATION_INTENT_TERMS
+        }
+
+    def coderag_tie_break_key(self, doc_id: int, query_terms: set[str]) -> tuple:
+        fields = self.fields_by_id.get(doc_id, {})
+        source_path = self.source_path_by_id.get(doc_id, "")
+        path = Path(source_path)
+        filename_terms = self._filename_terms(doc_id)
+        stem_terms = set(_split_code_words(path.stem))
+        exact_stem = bool(stem_terms and stem_terms <= query_terms)
+        exact_filename = bool(filename_terms and filename_terms <= query_terms)
+        path_terms = fields.get("path", set())
+        path_matches = query_terms & path_terms
+        path_match_ratio = len(path_matches) / max(1, len(path_terms))
+        extra_filename_terms = len(filename_terms - query_terms)
+        depth = self._path_depth(doc_id)
+        return (
+            1 if exact_filename or exact_stem else 0,
+            round(path_match_ratio, 4),
+            -extra_filename_terms,
+            -depth,
+        )
 
     def score_breakdown(self, doc_id: int, query_terms: set[str]) -> dict[str, float]:
         fields = self.fields_by_id.get(doc_id)
@@ -260,13 +374,64 @@ class CodeSignalReranker:
             return {}
 
         path_terms = fields["path"]
+        filename_terms = fields["filename"]
+        source_path = self.source_path_by_id.get(doc_id, "")
+        source = Path(source_path)
+        filename = source.name.lower()
+        suffix = source.suffix.lower()
+        filename_all_terms = self._filename_terms(doc_id)
+        stem_terms = set(_split_code_words(source.stem))
+        path_matches = query_terms & path_terms
+        filename_matches = query_terms & (filename_terms | filename_all_terms)
+        stem_matches = query_terms & stem_terms
+        depth = self._path_depth(doc_id)
+        coderag_mode = self.profile.mode == "coderag"
         contributions = {
-            "path": self.profile.path_boost * len(query_terms & path_terms),
-            "filename": self.profile.path_boost * 0.5 * len(query_terms & fields["filename"]),
+            "path": self.profile.path_boost * len(path_matches),
+            "filename": self.profile.filename_boost * len(filename_matches),
             "identifier": self.profile.identifier_boost * len(query_terms & fields["identifier"]),
             "structure": self.profile.structure_boost * len(query_terms & fields["structure"]),
             "proximity": self.proximity_score(doc_id, query_terms),
         }
+        if coderag_mode and stem_terms and stem_terms <= query_terms:
+            contributions["exact_stem"] = self.profile.exact_stem_boost
+        elif coderag_mode and stem_matches:
+            contributions["stem_terms"] = self.profile.exact_stem_boost * 0.5 * len(stem_matches)
+        if coderag_mode and filename.startswith(".") and stem_matches:
+            contributions["dotfile_intent"] = self.profile.dotfile_boost
+        if coderag_mode:
+            env_query_terms = query_terms & _ENV_DISAMBIGUATION_TERMS
+            env_filename_terms = filename_all_terms & _ENV_DISAMBIGUATION_TERMS
+            matched_env_terms = env_query_terms & env_filename_terms
+            extra_env_terms = env_filename_terms - env_query_terms
+            if matched_env_terms:
+                contributions["env_filename_match"] = self.profile.env_match_boost * len(matched_env_terms)
+            if extra_env_terms:
+                contributions["env_filename_mismatch"] = -self.profile.env_mismatch_penalty * len(extra_env_terms)
+            specific_terms = self._specific_query_terms(query_terms)
+            filename_specific_matches = filename_all_terms & specific_terms
+            if specific_terms and not filename_specific_matches and (filename_all_terms & _ENV_DISAMBIGUATION_TERMS):
+                contributions["specific_filename_mismatch"] = -self.profile.specific_term_mismatch_penalty
+            if filename in _ROOT_CONFIG_FILENAMES:
+                nested_intent = query_terms & _NESTED_PATH_INTENT_TERMS
+                root_intent = "root" in query_terms
+                if depth == 0 and (root_intent or not nested_intent):
+                    contributions["root_config_intent"] = self.profile.root_config_boost
+                elif depth > 0 and not nested_intent:
+                    contributions["nested_config_penalty"] = -self.profile.nested_config_penalty * min(depth, 3)
+        if coderag_mode and (
+            (suffix in _CONFIG_DOC_EXTENSIONS or filename in _CONFIG_DOC_FILENAMES)
+            and (path_matches or filename_matches or stem_matches)
+        ):
+            contributions["config_doc_intent"] = self.profile.config_doc_boost
+        if coderag_mode and "src" in query_terms and "src" in path_terms:
+            contributions["explicit_src_path"] = self.profile.source_path_boost
+        if coderag_mode and "benchmark" in path_terms and "benchmark" not in query_terms:
+            contributions["benchmark_path_penalty"] = -self.profile.benchmark_penalty
+        if coderag_mode and filename in _GENERIC_DOC_FILENAMES and not (filename_terms & query_terms & _GENERIC_DOC_INTENT_TERMS):
+            contributions["generic_doc_penalty"] = -self.profile.generic_doc_penalty
+        if coderag_mode and "security-advisories" in source_path.lower() and not (query_terms & _ADVISORY_INTENT_TERMS):
+            contributions["generic_advisory_penalty"] = -self.profile.generic_doc_penalty
         if query_terms & _TEST_INTENT_TERMS and "tests" in path_terms:
             contributions["test_path_intent"] = self.profile.intent_path_boost
         if query_terms & _IMPLEMENTATION_INTENT_TERMS and "src" in path_terms:
@@ -311,10 +476,12 @@ class CodeSignalReranker:
             return ranked_doc_ids[:top_k]
         scored = []
         for rank, doc_id in enumerate(ranked_doc_ids, start=1):
-            score = self.score(doc_id, query_terms) + base_weight * (len(ranked_doc_ids) - rank)
-            scored.append((doc_id, score))
-        scored.sort(key=lambda item: item[1], reverse=True)
-        return [doc_id for doc_id, score in scored[:top_k]]
+            score = self.score(doc_id, query_terms)
+            rank_prior = base_weight * (len(ranked_doc_ids) - rank)
+            tie_key = self.coderag_tie_break_key(doc_id, query_terms) if self.profile.mode == "coderag" else ()
+            scored.append((doc_id, score, tie_key, rank_prior))
+        scored.sort(key=lambda item: (item[1], item[2], item[3]), reverse=True)
+        return [doc_id for doc_id, _score, _tie_key, _rank_prior in scored[:top_k]]
 
     def explain(self, doc_id: int, query: str) -> dict:
         expanded_query, aliases = expand_query_aliases(query)

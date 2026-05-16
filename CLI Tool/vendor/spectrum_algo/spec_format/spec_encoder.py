@@ -14,7 +14,7 @@ Header (16 bytes, uncompressed):
                                        4=Text, 5=TS, 6=SQL, 7=Rust, 8=PHP,
                                        9=XML-compatible, 10=Java, 11=C, 12=C++,
                                        13=Go, 14=C#, 15=Shell, 16=JSON,
-                                       17=YAML, 18=TOML)
+                                       17=YAML, 18=TOML, 19=PowerShell)
   [14:16] Checksum:        uint16 BE  (sum of all original bytes mod 65536)
 
 Body (zlib-compressed, level 9):
@@ -66,6 +66,7 @@ from tokenizers.cpp_tokenizer import tokenise_cpp
 from tokenizers.go_tokenizer import tokenise_go
 from tokenizers.csharp_tokenizer import tokenise_csharp
 from tokenizers.shell_tokenizer import tokenise_shell
+from tokenizers.powershell_tokenizer import tokenise_powershell
 from tokenizers.config_tokenizer import tokenise_config
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,6 +92,7 @@ LANGUAGE_SHELL  = 15
 LANGUAGE_JSON   = 16
 LANGUAGE_YAML   = 17
 LANGUAGE_TOML   = 18
+LANGUAGE_POWERSHELL = 19
 
 FLAG_RLE = 0b0000_0001
 RLE_MODE_OFF = "off"
@@ -132,6 +134,9 @@ _EXT_TO_LANG = {
     ".sh":   LANGUAGE_SHELL,
     ".bash": LANGUAGE_SHELL,
     ".zsh":  LANGUAGE_SHELL,
+    ".ps1":  LANGUAGE_POWERSHELL,
+    ".psm1": LANGUAGE_POWERSHELL,
+    ".psd1": LANGUAGE_POWERSHELL,
     ".json": LANGUAGE_JSON,
     ".yaml": LANGUAGE_YAML,
     ".yml":  LANGUAGE_YAML,
@@ -158,6 +163,7 @@ _LANG_NAMES = {
     LANGUAGE_JSON:   "JSON",
     LANGUAGE_YAML:   "YAML",
     LANGUAGE_TOML:   "TOML",
+    LANGUAGE_POWERSHELL: "PowerShell",
 }
 
 
@@ -358,8 +364,8 @@ def encode_file(source_path: str, output_path: str,
     source_path  = Path(source_path)
     output_path  = Path(output_path)
 
-    source        = source_path.read_text(encoding="utf-8", errors="replace")
-    source_bytes  = source.encode("utf-8")
+    source_bytes  = source_path.read_bytes()
+    source        = source_bytes.decode("utf-8", errors="replace")
     original_size = len(source_bytes)
     checksum      = sum(source_bytes) & 0xFFFF
 
@@ -401,6 +407,8 @@ def encode_file(source_path: str, output_path: str,
         tokens = tokenise_csharp(source)
     elif language_id == LANGUAGE_SHELL:
         tokens = tokenise_shell(source)
+    elif language_id == LANGUAGE_POWERSHELL:
+        tokens = tokenise_powershell(source)
     elif language_id in (LANGUAGE_JSON, LANGUAGE_YAML, LANGUAGE_TOML):
         tokens = tokenise_config(source)
     else:
@@ -421,8 +429,9 @@ def encode_file(source_path: str, output_path: str,
         ids = apply_rle_ids(ids)
         flags |= FLAG_RLE
         rle_saved = raw_id_count - len(ids)
-        print(f"[spec_enc] RLE: {raw_id_count:,} → {len(ids):,} IDs "
+        print(f"[spec_enc] RLE: {raw_id_count:,} -> {len(ids):,} IDs "
               f"(saved {rle_saved:,}, {100*rle_saved/max(raw_id_count,1):.1f}%)")
+
     elif rle_mode == RLE_MODE_AUTO:
         ids, rle_blocks_encoded, rle_blocks_total = apply_rle_ids_auto(
             ids,
@@ -471,7 +480,7 @@ def encode_file(source_path: str, output_path: str,
     }
 
     print(f"[spec_enc] Saved {output_path.name}  "
-          f"({original_size:,} B → {spec_size:,} B, "
+          f"({original_size:,} B -> {spec_size:,} B, "
           f"ratio {stats['ratio']:.4f}x)")
 
     return stats
@@ -504,7 +513,7 @@ def main():
                         choices=[
                             "py", "html", "js", "css", "txt", "ts", "sql",
                             "rs", "php", "xml", "java", "c", "cpp", "go",
-                            "cs", "sh", "json", "yaml", "toml",
+                            "cs", "sh", "ps1", "powershell", "json", "yaml", "toml",
                         ],
                         default=None,
                         help="Force language (default: auto-detect from extension)")
@@ -538,6 +547,8 @@ def main():
         "go":   LANGUAGE_GO,
         "cs":   LANGUAGE_CSHARP,
         "sh":   LANGUAGE_SHELL,
+        "ps1":  LANGUAGE_POWERSHELL,
+        "powershell": LANGUAGE_POWERSHELL,
         "json": LANGUAGE_JSON,
         "yaml": LANGUAGE_YAML,
         "toml": LANGUAGE_TOML,

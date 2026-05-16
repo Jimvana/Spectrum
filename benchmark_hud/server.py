@@ -13,7 +13,7 @@ import time
 import uuid
 import zlib
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from statistics import mean
@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 import dictionary as D
 from encoder.encoder import tokenise_source
 from rag.normalization import retrieval_token_ids
+from rag.spectrum_serving import CodeSignalReranker, coderag_rerank_profile, expand_query_aliases
 from spec_format.spec_encoder import (
     FLAG_RLE,
     LANGUAGE_C,
@@ -41,6 +42,7 @@ from spec_format.spec_encoder import (
     LANGUAGE_JSON,
     LANGUAGE_JS,
     LANGUAGE_PHP,
+    LANGUAGE_POWERSHELL,
     LANGUAGE_PYTHON,
     LANGUAGE_RUST,
     LANGUAGE_SHELL,
@@ -64,6 +66,7 @@ from tokenizers.html_tokenizer import tokenise_html
 from tokenizers.java_tokenizer import tokenise_java
 from tokenizers.js_tokenizer import tokenise_js
 from tokenizers.php_tokenizer import tokenise_php
+from tokenizers.powershell_tokenizer import tokenise_powershell
 from tokenizers.rust_tokenizer import tokenise_rust
 from tokenizers.shell_tokenizer import tokenise_shell
 from tokenizers.sql_tokenizer import tokenise_sql
@@ -119,6 +122,9 @@ LANG_BY_EXT = {
     ".sh": LANGUAGE_SHELL,
     ".bash": LANGUAGE_SHELL,
     ".zsh": LANGUAGE_SHELL,
+    ".ps1": LANGUAGE_POWERSHELL,
+    ".psm1": LANGUAGE_POWERSHELL,
+    ".psd1": LANGUAGE_POWERSHELL,
     ".json": LANGUAGE_JSON,
     ".yaml": LANGUAGE_YAML,
     ".yml": LANGUAGE_YAML,
@@ -142,6 +148,7 @@ TOKENIZER_BY_LANG = {
     LANGUAGE_GO: tokenise_go,
     LANGUAGE_CSHARP: tokenise_csharp,
     LANGUAGE_SHELL: tokenise_shell,
+    LANGUAGE_POWERSHELL: tokenise_powershell,
     LANGUAGE_JSON: tokenise_config,
     LANGUAGE_YAML: tokenise_config,
     LANGUAGE_TOML: tokenise_config,
@@ -164,6 +171,7 @@ LANG_NAMES = {
     LANGUAGE_GO: "go",
     LANGUAGE_CSHARP: "csharp",
     LANGUAGE_SHELL: "shell",
+    LANGUAGE_POWERSHELL: "powershell",
     LANGUAGE_JSON: "json",
     LANGUAGE_YAML: "yaml",
     LANGUAGE_TOML: "toml",
@@ -227,6 +235,47 @@ PRESETS = {
         "default_queries": 42,
     },
 }
+
+SPECTRUM_PROFILES = {
+    "fast": "Fast",
+    "balanced": "Balanced",
+    "accurate": "Accurate",
+}
+
+
+def resolved_spectrum_config(profile_name: str, preset_name: str, run_dir: Path | None = None) -> dict:
+    profile = coderag_rerank_profile(profile_name)
+    preset = PRESETS[preset_name]
+    index_dir = run_dir / "spectrum" if run_dir else None
+    return {
+        "retrieval_mode": "coderag",
+        "profile": profile_name,
+        "profile_label": SPECTRUM_PROFILES[profile_name],
+        "index_directory": rel_path(index_dir) if index_dir else "per-run spectrum directory",
+        "fresh_index_per_run": True,
+        "reuses_encoded_corpus_between_runs": False,
+        "query_expansion": {
+            "enabled": True,
+            "method": "expand_query_aliases",
+            "profile_specific": False,
+        },
+        "build": {
+            "profile_affects_build": False,
+            "chunk_chars": int(preset.get("chunk_chars", 0) or 0),
+            "overlap_chars": int(preset.get("overlap_chars", 0) or 0),
+            "tokenisation_profile_specific": False,
+            "compression_profile_specific": False,
+            "stored_metadata_profile_specific": False,
+            "index_postings_profile_specific": False,
+        },
+        "ranking": {
+            "base_ranker": "BM25 over Spectrum retrieval token IDs",
+            "profile_affects_ranking": True,
+            "profile_effect": "CodeRAG candidate window and repo-aware code/path/doc scoring",
+            "reranker": "CodeSignalReranker",
+            "rerank_profile": asdict(profile) if profile else None,
+        },
+    }
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,}")
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
@@ -386,10 +435,18 @@ def make_queries(docs: list[BenchDoc], limit: int) -> list[Query]:
     for doc in docs:
         by_source.setdefault(doc.source_path, []).append(doc)
     queries = []
+    templates = (
+        "find code for {words}",
+        "where is {words} implemented",
+        "show repository context for {words}",
+        "which file handles {words}",
+    )
     for source_path, group in sorted(by_source.items()):
         words = query_words_for_doc(group[0])
+        phrase = " ".join(words)
+        template = templates[len(queries) % len(templates)]
         queries.append(Query(
-            query=" ".join(words),
+            query=template.format(words=phrase),
             title=source_path,
             relevant_ids=[doc.id for doc in group],
         ))
@@ -410,6 +467,16 @@ def normalize_github_repo(value: str) -> tuple[str, str]:
     url = f"https://github.com/{owner_name}.git"
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", owner_name.replace("/", "-")).strip("-")
     return url, slug or "github-repo"
+
+
+def repo_display_name(preset_name: str, repo_url: str | None) -> str:
+    if repo_url:
+        try:
+            url, _slug = normalize_github_repo(repo_url)
+            return url.removeprefix("https://github.com/").removesuffix(".git")
+        except ValueError:
+            return repo_url.strip()
+    return f"Spectrum local checkout ({PRESETS[preset_name]['label']})"
 
 
 def prepare_github_clone(repo: str, run_dir: Path) -> tuple[str, str, Path]:
@@ -598,6 +665,7 @@ class PostingBM25:
 class BenchmarkEngine:
     key = "engine"
     label = "Engine"
+    reconstructable = False
 
     def build(self, docs: list[BenchDoc], run_dir: Path) -> EngineBuild:
         raise NotImplementedError
@@ -605,10 +673,24 @@ class BenchmarkEngine:
     def search(self, query: str, top_k: int) -> list[int]:
         raise NotImplementedError
 
+    def debug_failure(self, query: str, result_ids: list[int], expected_ids: list[int], doc_by_id: dict[int, BenchDoc]) -> dict:
+        return {}
+
 
 class SpectrumEngine(BenchmarkEngine):
     key = "spectrum"
-    label = "Spectrum SPB"
+    label = "Spectrum CodeRAG"
+    reconstructable = True
+
+    def __init__(self, profile_name: str = "accurate"):
+        profile_name = profile_name.lower()
+        if profile_name not in SPECTRUM_PROFILES:
+            raise ValueError(f"Unknown Spectrum profile: {profile_name}")
+        self.profile_name = profile_name
+        self.profile_label = SPECTRUM_PROFILES[profile_name]
+        self.label = f"Spectrum CodeRAG ({self.profile_label})"
+        self.retrieval_mode = "coderag"
+        self.rerank_profile = coderag_rerank_profile(profile_name)
 
     def build(self, docs: list[BenchDoc], run_dir: Path) -> EngineBuild:
         out_dir = run_dir / self.key
@@ -617,6 +699,7 @@ class SpectrumEngine(BenchmarkEngine):
         started = time.perf_counter()
         postings: dict[int, list[tuple[int, int]]] = {}
         documents = []
+        text_by_id = {}
         total_tokens = 0
         for doc in docs:
             data, dict_ids = encode_code_to_spec_bytes(doc.text, doc.source_path, doc.language_id)
@@ -624,6 +707,7 @@ class SpectrumEngine(BenchmarkEngine):
             (out_dir / spec_rel).write_bytes(data)
             freq = Counter(dict_ids)
             total_tokens += len(dict_ids)
+            text_by_id[doc.id] = doc.text
             documents.append({
                 "id": doc.id,
                 "title": doc.title,
@@ -639,20 +723,40 @@ class SpectrumEngine(BenchmarkEngine):
         (out_dir / "docs.json").write_text(json.dumps({"documents": documents}, separators=(",", ":")), encoding="utf-8")
         write_binary_postings(out_dir / "index.hudspb", documents, postings)
         self.bm25 = PostingBM25(documents, postings, avg_doc_length)
+        self.reranker = (
+            CodeSignalReranker(documents, text_by_id, self.rerank_profile)
+            if self.rerank_profile and self.rerank_profile.candidates > 0
+            else None
+        )
         return EngineBuild(
             status="ok",
             build_ms=(time.perf_counter() - started) * 1000,
             size_bytes=dir_size(out_dir),
-            extra={"tokens": total_tokens, "artifacts": rel_path(out_dir)},
+            extra={
+                "tokens": total_tokens,
+                "artifacts": rel_path(out_dir),
+                "retrieval_mode": self.retrieval_mode,
+                "profile": self.profile_name,
+                "rerank_candidates": self.rerank_profile.candidates if self.rerank_profile else 0,
+            },
         )
 
     def search(self, query: str, top_k: int) -> list[int]:
-        return self.bm25.search(retrieval_token_ids(query), top_k)
+        expanded_query, _aliases = expand_query_aliases(query)
+        candidate_count = max(top_k, self.reranker.profile.candidates if self.reranker else top_k)
+        doc_ids = self.bm25.search(retrieval_token_ids(expanded_query), candidate_count)
+        if self.reranker:
+            return self.reranker.rerank(doc_ids, expanded_query, top_k=top_k)
+        return doc_ids[:top_k]
+
+    def debug_failure(self, query: str, result_ids: list[int], expected_ids: list[int], doc_by_id: dict[int, BenchDoc]) -> dict:
+        return spectrum_debug_passes(query, result_ids, expected_ids, doc_by_id, self.reranker)
 
 
 class RawBM25Engine(BenchmarkEngine):
     key = "raw_bm25"
     label = "Raw BM25"
+    reconstructable = True
 
     def build(self, docs: list[BenchDoc], run_dir: Path) -> EngineBuild:
         out_dir = run_dir / self.key
@@ -694,6 +798,7 @@ class RawBM25Engine(BenchmarkEngine):
 class TfidfEngine(BenchmarkEngine):
     key = "tfidf"
     label = "TF-IDF"
+    reconstructable = True
 
     def build(self, docs: list[BenchDoc], run_dir: Path) -> EngineBuild:
         if ML_IMPORT_ERROR:
@@ -769,6 +874,51 @@ class DenseVectorEngine(BenchmarkEngine):
         return [int(doc_id) for doc_id in order if scores[int(doc_id)] > 0]
 
 
+class ChromaEngine(DenseVectorEngine):
+    key = "chroma"
+    label = "Chroma"
+    reconstructable = True
+
+    def build(self, docs: list[BenchDoc], run_dir: Path) -> EngineBuild:
+        try:
+            import chromadb
+        except Exception as exc:
+            return EngineBuild(status="skipped", error=f"chromadb unavailable: {exc}")
+        report = super().build(docs, run_dir)
+        if report.status != "ok":
+            return report
+        out_dir = run_dir / self.key
+        try:
+            client = chromadb.PersistentClient(path=str(out_dir / "chroma"))
+            self.collection = client.get_or_create_collection("coderag")
+            self.collection.add(
+                ids=[str(doc.id) for doc in docs],
+                embeddings=self.matrix.astype("float32").tolist(),
+                documents=[doc.text for doc in docs],
+                metadatas=[
+                    {
+                        "title": doc.title,
+                        "source_path": doc.source_path,
+                        "language_id": doc.language_id,
+                        "chunk_index": doc.chunk_index,
+                    }
+                    for doc in docs
+                ],
+            )
+        except Exception as exc:
+            return EngineBuild(status="skipped", error=f"chroma build failed: {exc}")
+        report.size_bytes = dir_size(out_dir)
+        report.extra = dict(report.extra or {}, backend="chromadb.PersistentClient")
+        return report
+
+    def search(self, query: str, top_k: int) -> list[int]:
+        q = self.vectorizer.transform([query])
+        q_dense = normalize(self.svd.transform(q)).astype("float32")
+        result = self.collection.query(query_embeddings=q_dense.tolist(), n_results=top_k)
+        ids = result.get("ids", [[]])[0]
+        return [int(doc_id) for doc_id in ids]
+
+
 class FaissEngine(DenseVectorEngine):
     key = "faiss"
     label = "FAISS Flat"
@@ -796,13 +946,84 @@ class FaissEngine(DenseVectorEngine):
         return [int(doc_id) for doc_id, score in zip(ids[0], scores[0]) if doc_id >= 0 and score > 0]
 
 
-def engines() -> list[BenchmarkEngine]:
+class HybridSparseDenseEngine(BenchmarkEngine):
+    key = "hybrid"
+    label = "Hybrid Sparse+Dense"
+    reconstructable = True
+
+    def __init__(self, dimensions: int = 96):
+        self.dimensions = dimensions
+
+    def build(self, docs: list[BenchDoc], run_dir: Path) -> EngineBuild:
+        if ML_IMPORT_ERROR:
+            return EngineBuild(status="skipped", error=f"scikit-learn stack unavailable: {ML_IMPORT_ERROR}")
+        out_dir = run_dir / self.key
+        out_dir.mkdir(parents=True, exist_ok=True)
+        started = time.perf_counter()
+        documents = []
+        postings: dict[str, list[tuple[int, int]]] = {}
+        total_tokens = 0
+        with (out_dir / "chunks.jsonl").open("w", encoding="utf-8") as handle:
+            for doc in docs:
+                handle.write(json.dumps(doc.__dict__, ensure_ascii=False, separators=(",", ":")) + "\n")
+                tokens = raw_tokens(doc.text)
+                total_tokens += len(tokens)
+                freq = Counter(tokens)
+                documents.append({
+                    "id": doc.id,
+                    "title": doc.title,
+                    "source_path": doc.source_path,
+                    "orig_length": len(doc.text.encode("utf-8")),
+                    "token_count": len(tokens),
+                })
+                for token, count in freq.items():
+                    postings.setdefault(token, []).append((doc.id, count))
+        write_binary_postings(out_dir / "index.hudbm25", documents, postings)
+        avg_doc_length = total_tokens / len(documents) if documents else 0.0
+        self.bm25 = PostingBM25(documents, postings, avg_doc_length)
+        try:
+            self.vectorizer = TfidfVectorizer(lowercase=True, stop_words="english", max_features=100_000, norm="l2")
+            tfidf = self.vectorizer.fit_transform([doc.text for doc in docs])
+            if min(tfidf.shape) < 2:
+                return EngineBuild(status="skipped", error="corpus too small for hybrid vector benchmark")
+            dims = min(self.dimensions, max(1, min(tfidf.shape) - 1))
+            self.svd = TruncatedSVD(n_components=dims, random_state=42)
+            self.matrix = normalize(self.svd.fit_transform(tfidf)).astype("float32")
+        except Exception as exc:
+            return EngineBuild(status="skipped", error=str(exc))
+        np.save(out_dir / "dense_lsa.npy", self.matrix)
+        vocabulary = {term: int(index) for term, index in self.vectorizer.vocabulary_.items()}
+        (out_dir / "vocabulary.json").write_text(json.dumps(vocabulary, separators=(",", ":")), encoding="utf-8")
+        return EngineBuild(
+            status="ok",
+            build_ms=(time.perf_counter() - started) * 1000,
+            size_bytes=dir_size(out_dir),
+            extra={"tokens": total_tokens, "dimensions": int(self.matrix.shape[1]), "artifacts": rel_path(out_dir)},
+        )
+
+    def search(self, query: str, top_k: int) -> list[int]:
+        candidate_count = max(40, top_k * 8)
+        sparse_ids = self.bm25.search(raw_tokens(query), candidate_count)
+        q = self.vectorizer.transform([query])
+        q_dense = normalize(self.svd.transform(q)).astype("float32")
+        scores = self.matrix @ q_dense.T
+        dense_ids = [int(doc_id) for doc_id in np.argsort(-scores.ravel())[:candidate_count] if scores[int(doc_id)] > 0]
+        fused: dict[int, float] = {}
+        for rank, doc_id in enumerate(sparse_ids, start=1):
+            fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (60 + rank)
+        for rank, doc_id in enumerate(dense_ids, start=1):
+            fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (60 + rank)
+        return [doc_id for doc_id, _score in sorted(fused.items(), key=lambda item: item[1], reverse=True)[:top_k]]
+
+
+def engines(spectrum_profile: str = "accurate") -> list[BenchmarkEngine]:
     return [
-        SpectrumEngine(),
-        TfidfEngine(),
-        RawBM25Engine(),
-        DenseVectorEngine(),
+        SpectrumEngine(spectrum_profile),
         FaissEngine(),
+        RawBM25Engine(),
+        TfidfEngine(),
+        ChromaEngine(),
+        HybridSparseDenseEngine(),
     ]
 
 
@@ -825,13 +1046,171 @@ def emit(event_type: str, payload: dict) -> dict:
     return payload
 
 
-def evaluate_engine(engine: BenchmarkEngine, queries: list[Query], docs: list[BenchDoc], top_k: int, build: EngineBuild) -> Iterable[dict]:
+def ranked_result_trace(result_ids: list[int], doc_by_id: dict[int, BenchDoc]) -> list[dict]:
+    rows = []
+    for rank, doc_id in enumerate(result_ids, start=1):
+        doc = doc_by_id.get(doc_id)
+        rows.append({
+            "rank": rank,
+            "doc_id": doc_id,
+            "title": doc.title if doc else "",
+            "source_path": doc.source_path if doc else "",
+        })
+    return rows
+
+
+def doc_debug_terms(doc: BenchDoc | None) -> dict:
+    if not doc:
+        return {"path": "", "dir": "", "filename": "", "stem": "", "extension": "", "terms": []}
+    path = Path(doc.source_path)
+    terms = []
+    for value in (*path.parts, path.stem, path.suffix.lstrip(".")):
+        terms.extend(split_words(value))
+    return {
+        "path": doc.source_path,
+        "dir": path.parent.as_posix(),
+        "filename": path.name,
+        "stem": path.stem.lower(),
+        "extension": path.suffix.lower(),
+        "terms": list(dict.fromkeys(terms)),
+    }
+
+
+def query_debug_terms(query: str) -> set[str]:
+    terms = []
+    for token in raw_tokens(query):
+        terms.extend(split_words(token))
+    return set(terms)
+
+
+def is_generic_doc(path: str) -> bool:
+    name = Path(path).name.lower()
+    return name in {"changelog.md", "roadmap.md", "readme.md", "contributing.md"} or "security-advisories" in path.lower()
+
+
+def is_config_or_doc(path: str) -> bool:
+    name = Path(path).name.lower()
+    suffix = Path(path).suffix.lower()
+    return suffix in {".md", ".json", ".yaml", ".yml", ".toml"} or name in {
+        "docker-compose.yml",
+        "package.json",
+        "plugin.json",
+        "hooks.json",
+        "hooks.codex.json",
+        ".mcp.json",
+    }
+
+
+def rerank_explain_rows(
+    query: str,
+    candidate_ids: list[int],
+    expected_ids: list[int],
+    doc_by_id: dict[int, BenchDoc],
+    reranker: CodeSignalReranker | None,
+) -> list[dict]:
+    if not reranker:
+        return []
+    ordered_ids = list(dict.fromkeys(candidate_ids + expected_ids))
+    rows = []
+    for doc_id in ordered_ids:
+        doc = doc_by_id.get(doc_id)
+        explanation = reranker.explain(doc_id, query)
+        rows.append({
+            "doc_id": doc_id,
+            "title": doc.title if doc else "",
+            "is_expected": doc_id in expected_ids,
+            **explanation,
+        })
+    return rows
+
+
+def spectrum_debug_passes(
+    query: str,
+    result_ids: list[int],
+    expected_ids: list[int],
+    doc_by_id: dict[int, BenchDoc],
+    reranker: CodeSignalReranker | None,
+) -> dict:
+    query_terms = query_debug_terms(query)
+    expected_docs = [doc_by_id[doc_id] for doc_id in expected_ids if doc_id in doc_by_id]
+    top_doc = doc_by_id.get(result_ids[0]) if result_ids else None
+    expected_primary = expected_docs[0] if expected_docs else None
+    expected_info = doc_debug_terms(expected_primary)
+    top_info = doc_debug_terms(top_doc)
+    expected_path_terms = set(expected_info["terms"])
+    top_path_terms = set(top_info["terms"])
+    same_dir = bool(expected_info["dir"] and expected_info["dir"] == top_info["dir"])
+    expected_stem_in_query = expected_info["stem"] in query_terms if expected_info["stem"] else False
+    expected_filename_in_query = expected_info["filename"].lower() in query.lower() if expected_info["filename"] else False
+    top_is_generic = is_generic_doc(top_info["path"])
+    expected_is_config_or_doc = is_config_or_doc(expected_info["path"])
+    rerank_rows = rerank_explain_rows(query, result_ids, expected_ids, doc_by_id, reranker)
+    return {
+        "debug_pass_order": [
+            "exact_path_title_match",
+            "config_doc_intent_boost",
+            "generic_doc_crowding_penalty",
+            "sibling_tie_break",
+            "reranker_score_breakdown",
+        ],
+        "passes": [
+            {
+                "name": "exact_path_title_match",
+                "triggered": bool(expected_path_terms & query_terms or expected_stem_in_query or expected_filename_in_query),
+                "observation": "Expected path/title terms are present in the query but did not win rank 1.",
+                "expected_path_terms_in_query": sorted(expected_path_terms & query_terms),
+                "top_path_terms_in_query": sorted(top_path_terms & query_terms),
+                "expected_filename_in_query": expected_filename_in_query,
+                "expected_stem_in_query": expected_stem_in_query,
+            },
+            {
+                "name": "config_doc_intent_boost",
+                "triggered": expected_is_config_or_doc,
+                "observation": "Expected target is a doc/config/metadata file that may need explicit path and file-type intent boosts.",
+                "expected_extension": expected_info["extension"],
+                "expected_filename": expected_info["filename"],
+            },
+            {
+                "name": "generic_doc_crowding_penalty",
+                "triggered": top_is_generic,
+                "observation": "Top result is a broad repository document or advisory that may crowd out narrower targets.",
+                "top_path": top_info["path"],
+                "top_is_generic_doc": top_is_generic,
+            },
+            {
+                "name": "sibling_tie_break",
+                "triggered": same_dir,
+                "observation": "Top result and expected result are in the same directory; a filename/stem tie-break may be needed.",
+                "same_directory": same_dir,
+                "expected_directory": expected_info["dir"],
+                "top_directory": top_info["dir"],
+            },
+            {
+                "name": "reranker_score_breakdown",
+                "triggered": bool(rerank_rows),
+                "observation": "Per-candidate CodeSignalReranker explanations for the returned candidates plus expected docs.",
+                "candidates": rerank_rows,
+            },
+        ],
+    }
+
+
+def evaluate_engine(
+    engine: BenchmarkEngine,
+    queries: list[Query],
+    docs: list[BenchDoc],
+    top_k: int,
+    build: EngineBuild,
+    debug_failures: list[dict] | None = None,
+    low_rank_cutoff: int = 1,
+) -> Iterable[dict]:
     hit1 = 0
     recall = 0
     reciprocal_ranks = []
     latencies = []
     doc_by_id = {doc.id: doc for doc in docs}
     total = max(1, len(queries))
+    reconstruction_rate = 1.0 if engine.reconstructable else 0.0
     for index, item in enumerate(queries, start=1):
         started = time.perf_counter()
         result_ids = engine.search(item.query, top_k)
@@ -845,6 +1224,22 @@ def evaluate_engine(engine: BenchmarkEngine, queries: list[Query], docs: list[Be
             recall += 1
         reciprocal_ranks.append(1 / rank if rank else 0.0)
         top_doc = doc_by_id.get(result_ids[0]) if result_ids else None
+        if debug_failures is not None and (rank is None or rank > low_rank_cutoff):
+            expected_docs = [doc_by_id[doc_id] for doc_id in item.relevant_ids if doc_id in doc_by_id]
+            debug_failures.append({
+                "query_index": index,
+                "failure_type": "miss" if rank is None else "low_rank",
+                "query": item.query,
+                "expected": item.title,
+                "expected_ids": item.relevant_ids,
+                "expected_titles": [doc.title for doc in expected_docs],
+                "rank": rank,
+                "top": top_doc.title if top_doc else "",
+                "latency_ms": round(elapsed_ms, 4),
+                "result_ids": result_ids,
+                "results": ranked_result_trace(result_ids, doc_by_id),
+                "debug": engine.debug_failure(item.query, result_ids, item.relevant_ids, doc_by_id),
+            })
         metrics = {
             "hit1": round(hit1 / index, 4),
             "recall": round(recall / index, 4),
@@ -855,6 +1250,7 @@ def evaluate_engine(engine: BenchmarkEngine, queries: list[Query], docs: list[Be
             "queries_total": total,
             "size_bytes": build.size_bytes,
             "size_label": format_bytes(build.size_bytes),
+            "reconstruction_rate": reconstruction_rate,
         }
         yield emit("metric", {
             "engine": engine.key,
@@ -883,13 +1279,24 @@ def evaluate_engine(engine: BenchmarkEngine, queries: list[Query], docs: list[Be
             "queries_total": len(queries),
             "size_bytes": build.size_bytes,
             "size_label": format_bytes(build.size_bytes),
+            "reconstruction_rate": reconstruction_rate,
         },
     })
 
 
-def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: str | None = None) -> Iterable[dict]:
+def run_benchmark(
+    preset_name: str,
+    query_limit: int,
+    top_k: int = 5,
+    repo_url: str | None = None,
+    spectrum_profile: str = "accurate",
+) -> Iterable[dict]:
     if preset_name not in PRESETS:
         yield emit("error", {"message": f"Unknown preset: {preset_name}"})
+        return
+    spectrum_profile = spectrum_profile.lower()
+    if spectrum_profile not in SPECTRUM_PROFILES:
+        yield emit("error", {"message": f"Unknown Spectrum profile: {spectrum_profile}"})
         return
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     run_dir = RUNS_DIR / run_id
@@ -919,16 +1326,38 @@ def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: 
     query_limit = query_limit or default_queries
     queries = make_queries(docs, min(query_limit, max(1, len(docs))))
     summary = corpus_summary(paths, docs)
-    engine_list = engines()
+    repo_name = repo_display_name(preset_name, repo_url)
+    spectrum_config = resolved_spectrum_config(spectrum_profile, preset_name, run_dir)
+    spectrum_debug = {
+        "description": "Spectrum queries where the expected document missed top-k or appeared below rank 1.",
+        "debug_pass_order": [
+            "exact_path_title_match",
+            "config_doc_intent_boost",
+            "generic_doc_crowding_penalty",
+            "sibling_tie_break",
+            "reranker_score_breakdown",
+        ],
+        "low_rank_cutoff": 1,
+        "failure_count": 0,
+        "miss_count": 0,
+        "low_rank_count": 0,
+        "artifact": rel_path(run_dir / "spectrum_debug.json"),
+        "failures": [],
+    }
+    engine_list = engines(spectrum_profile)
     yield emit("run_start", {
         "run_id": run_id,
         "preset": preset_name,
         "preset_label": PRESETS[preset_name]["label"],
+        "repo_name": repo_name,
+        "spectrum_profile": spectrum_profile,
+        "spectrum_profile_label": SPECTRUM_PROFILES[spectrum_profile],
         "source": repo_url or "",
         "top_k": top_k,
         "query_count": len(queries),
         "run_dir": rel_path(run_dir),
         "corpus": summary,
+        "spectrum_config": spectrum_config,
         "engines": [{"key": engine.key, "label": engine.label} for engine in engine_list],
     })
     final_rows = []
@@ -936,6 +1365,7 @@ def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: 
         yield emit("engine_start", {"engine": engine.key, "label": engine.label})
         build = engine.build(docs, run_dir)
         ratio = build.size_bytes / summary["raw_bytes"] if summary["raw_bytes"] and build.size_bytes else 0.0
+        reconstruction_rate = 1.0 if build.status == "ok" and engine.reconstructable else 0.0 if build.status == "ok" else None
         yield emit("engine_built", {
             "engine": engine.key,
             "label": engine.label,
@@ -944,6 +1374,7 @@ def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: 
             "size_bytes": build.size_bytes,
             "size_label": format_bytes(build.size_bytes),
             "compression_ratio": round(ratio, 4),
+            "reconstruction_rate": reconstruction_rate,
             "error": build.error,
             "extra": build.extra or {},
         })
@@ -956,10 +1387,12 @@ def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: 
                 "build_ms": round(build.build_ms, 4),
                 "size_bytes": build.size_bytes,
                 "compression_ratio": round(ratio, 4),
+                "reconstruction_rate": reconstruction_rate,
             })
             continue
         last_done = None
-        for event in evaluate_engine(engine, queries, docs, top_k, build):
+        debug_failures = spectrum_debug["failures"] if engine.key == "spectrum" else None
+        for event in evaluate_engine(engine, queries, docs, top_k, build, debug_failures=debug_failures):
             if event["type"] == "engine_done":
                 last_done = event["metrics"]
             yield event
@@ -971,23 +1404,52 @@ def run_benchmark(preset_name: str, query_limit: int, top_k: int = 5, repo_url: 
             "size_bytes": build.size_bytes,
             "size_label": format_bytes(build.size_bytes),
             "compression_ratio": round(ratio, 4),
+            "reconstruction_rate": reconstruction_rate,
             **(last_done or {}),
         })
+    spectrum_debug["failure_count"] = len(spectrum_debug["failures"])
+    spectrum_debug["miss_count"] = sum(1 for item in spectrum_debug["failures"] if item["failure_type"] == "miss")
+    spectrum_debug["low_rank_count"] = sum(1 for item in spectrum_debug["failures"] if item["failure_type"] == "low_rank")
+    (run_dir / "spectrum_debug.json").write_text(json.dumps(spectrum_debug, indent=2), encoding="utf-8")
     report = {
         "format": "spectrum-benchmark-hud-run-v1",
         "run_id": run_id,
         "preset": preset_name,
+        "preset_label": PRESETS[preset_name]["label"],
+        "repo_name": repo_name,
+        "spectrum_profile": spectrum_profile,
         "source": repo_url or "",
         "top_k": top_k,
+        "query_count": len(queries),
         "corpus": summary,
+        "spectrum_config": spectrum_config,
+        "spectrum_debug": spectrum_debug,
         "results": final_rows,
     }
     (run_dir / "summary.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    yield emit("run_complete", {"run_id": run_id, "run_dir": rel_path(run_dir), "corpus": summary, "results": final_rows})
+    yield emit(
+        "run_complete",
+        {
+            "run_id": run_id,
+            "run_dir": rel_path(run_dir),
+            "preset": preset_name,
+            "preset_label": PRESETS[preset_name]["label"],
+            "repo_name": repo_name,
+            "spectrum_profile": spectrum_profile,
+            "spectrum_profile_label": SPECTRUM_PROFILES[spectrum_profile],
+            "source": repo_url or "",
+            "top_k": top_k,
+            "query_count": len(queries),
+            "corpus": summary,
+            "spectrum_config": spectrum_config,
+            "spectrum_debug": spectrum_debug,
+            "results": final_rows,
+        },
+    )
 
 
 def presets_payload() -> dict:
-    return {
+    payload = {
         key: {
             "label": value["label"],
             "default_queries": value["default_queries"],
@@ -996,6 +1458,8 @@ def presets_payload() -> dict:
         }
         for key, value in PRESETS.items()
     }
+    payload["spectrum_profiles"] = SPECTRUM_PROFILES
+    return payload
 
 
 class HudHandler(SimpleHTTPRequestHandler):
@@ -1018,7 +1482,8 @@ class HudHandler(SimpleHTTPRequestHandler):
             query_count = int(params.get("queries", ["0"])[0] or 0)
             top_k = int(params.get("top_k", ["5"])[0] or 5)
             repo_url = params.get("repo", [""])[0]
-            self.send_events(preset, query_count, top_k, repo_url)
+            spectrum_profile = params.get("profile", ["accurate"])[0]
+            self.send_events(preset, query_count, top_k, repo_url, spectrum_profile)
             return
         if parsed.path == "/":
             self.path = "/index.html"
@@ -1033,14 +1498,27 @@ class HudHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def send_events(self, preset: str, query_count: int, top_k: int, repo_url: str = "") -> None:
+    def send_events(
+        self,
+        preset: str,
+        query_count: int,
+        top_k: int,
+        repo_url: str = "",
+        spectrum_profile: str = "accurate",
+    ) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
-            for payload in run_benchmark(preset, query_count, top_k, repo_url=repo_url):
+            for payload in run_benchmark(
+                preset,
+                query_count,
+                top_k,
+                repo_url=repo_url,
+                spectrum_profile=spectrum_profile,
+            ):
                 message = f"event: {payload['type']}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
                 self.wfile.write(message.encode("utf-8"))
                 self.wfile.flush()
@@ -1060,10 +1538,16 @@ def main() -> int:
     parser.add_argument("--once", choices=sorted(PRESETS), help="Run one benchmark to stdout instead of serving the HUD")
     parser.add_argument("--queries", type=int, default=8)
     parser.add_argument("--repo", help="GitHub repo for --once custom runs, as owner/name or https://github.com/owner/name")
+    parser.add_argument(
+        "--profile",
+        choices=sorted(SPECTRUM_PROFILES),
+        default="accurate",
+        help="Spectrum rerank profile for HUD runs.",
+    )
     args = parser.parse_args()
 
     if args.once:
-        for payload in run_benchmark(args.once, args.queries, repo_url=args.repo):
+        for payload in run_benchmark(args.once, args.queries, repo_url=args.repo, spectrum_profile=args.profile):
             print(json.dumps(payload, ensure_ascii=False))
         return 0
 

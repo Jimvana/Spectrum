@@ -1,6 +1,50 @@
 # Spectrum
 
-Spectrum is a deterministic retrieval-aware encoding layer for compact, lossless, searchable code and text stores.
+Spectrum is a local-first way to turn a codebase into a compact, lossless,
+searchable `.specpack` that can be queried and restored byte-for-byte.
+
+The developer preview ships first as an npm-installed CLI. The current preview
+is `spectrumstore@0.1.0-preview.4`.
+
+## Turn The Key
+
+Install Spectrum, point it at a repo, and let the guided loader do the rest:
+
+```powershell
+npm install -g spectrumstore
+spectrum load
+```
+
+`spectrum load` walks you through the complete local path: it checks the
+install, packs your repo into a compact `.specpack`, then starts the local HTTP
+API so an agent, app, or retrieval workflow can search and hydrate exact source.
+
+Prefer copy/paste commands instead of prompts:
+
+```powershell
+spectrum load ./my-repo ./my-repo.specpack --yes
+```
+
+After it starts, your pack is available locally:
+
+```text
+http://127.0.0.1:7777
+```
+
+Useful checks:
+
+```powershell
+curl http://127.0.0.1:7777/health
+curl http://127.0.0.1:7777/packs
+```
+
+Use it when you want local, exact, searchable codebase packs for agents, RAG
+tools, and retrieval workflows without keeping raw chunks and a separate search
+store as the only source of truth.
+
+See the [5-minute quickstart](docs/quickstart.md), the
+[comparison guide](docs/why-spectrum.md), and the
+[release checklist](RELEASE_CHECKLIST.md).
 
 ## Spectrum Benchmark Demo
 
@@ -29,21 +73,113 @@ The first turnkey product surface is **Spectrum Store Developer Preview**: a
 local-first command line tool for creating compact, lossless, searchable
 `.specpack` stores from folders of code or text.
 
-Install from a local checkout:
+Install from npm:
+
+```powershell
+npm install -g spectrumstore
+spectrum doctor
+```
+
+To pin the preview channel explicitly:
+
+```powershell
+npm install -g spectrumstore@preview
+```
+
+Install from a local checkout while developing Spectrum itself:
 
 ```powershell
 npm install -g . --force
 ```
 
-Then run the core workflow:
+Then run the guided workflow:
+
+```powershell
+spectrum load ./docs ./docs.specpack --yes
+```
+
+Or run the core workflow manually:
 
 ```powershell
 spectrum pack ./docs ./docs.specpack --json
+spectrum serve ./docs.specpack --port 7777
+```
+
+As the project changes, append new continuity notes, deployment docs, or source
+files without rebuilding the pack from scratch:
+
+```powershell
+spectrum append ./docs.specpack ./project-notes --json
+```
+
+If a source path already exists in the pack, append fails by default. Use
+`--replace` when you intentionally want the newer file to replace the existing
+packed document. Appending drops any embedded `index.bin` because it is derived
+from the old manifest; rebuild it with `spectrum index ./docs.specpack --embed`
+when you want embedded search again.
+
+For a portable project pack with standard agent context files, use the project
+workflow:
+
+```powershell
+spectrum project init ./my-project --name "My Project"
+spectrum project add ./my-project/.spectrum/project.specpack ./new-notes
+spectrum project serve ./my-project/.spectrum/project.specpack --port 7777
+```
+
+This creates `.spectrum-project/` inside the project with files such as
+`project.md`, `deploy.md`, `ssh.md`, and `secrets.refs.md`. It also creates a
+`.spectrum/` runtime folder:
+
+```text
+.spectrum/
+  project.specpack
+  start.cmd
+  start.ps1
+  start.command
+  start.sh
+  README.md
+  metadata.json
+```
+
+Double-click `start.cmd` on Windows or `start.command` on macOS to start the
+local project server. When served, agents can fetch the starter context bundle
+from:
+
+```text
+http://127.0.0.1:7777/projects/repo/context
+```
+
+Humans can use the built-in local dashboard:
+
+```text
+http://127.0.0.1:7777/project
+```
+
+Additional diagnostics:
+
+```powershell
 spectrum verify ./docs.specpack --json
 spectrum index ./docs.specpack --embed --json
 spectrum search ./docs.specpack "authentication middleware" --top 5 --json
 spectrum unpack ./docs.specpack ./docs-restored --json
 ```
+
+Guided hub workflows:
+
+```powershell
+spectrum hub -b
+spectrum hub -a
+spectrum hub -s
+spectrum hub -v
+```
+
+- `hub -b` walks through creating a portable pack, choosing where it lives,
+  adding optional files, and serving now or later.
+- `hub -a` walks through appending files or folders to an existing pack.
+- `hub -s` walks through choosing a pack and port to serve.
+- `hub -v` discovers local listening ports, reports Spectrum API servers, and
+  prints `No spectrum servers operating` when none respond.
 
 The package name is `spectrumstore`, and it exposes both `spectrum` and
 `spectrumstore` commands. It requires Node.js 18+ and Python 3.10+ on `PATH`;
@@ -53,15 +189,17 @@ and current codec runtime so users do not need to set `PYTHONPATH` or
 
 ## Spectrum Benchmark HUD
 
-The repository includes a local Benchmark HUD for visually comparing Spectrum
-against common retrieval baselines on real code corpora. It streams live build,
-size, latency, recall, and MRR events for:
+The repository includes a local **Spectrum CodeRAG Benchmark HUD** for visually
+comparing repo-level code retrieval against common RAG baselines on real code
+corpora. It streams live build, storage density, latency, context quality,
+recall, MRR, deterministic reconstruction, and Spectrum debug events for:
 
-* Spectrum SPB,
-* TF-IDF,
+* Spectrum CodeRAG,
+* FAISS Flat,
 * raw BM25,
-* dense vectors,
-* and FAISS Flat when available.
+* TF-IDF,
+* Chroma when available,
+* and hybrid sparse+dense retrieval.
 
 Run it from the repository root on Windows:
 
@@ -85,8 +223,14 @@ http://127.0.0.1:8765
 Use `Small`, `Medium`, or `Large` for built-in corpora, or choose `My own repo`
 and enter a public GitHub repository as `owner/name` or
 `https://github.com/owner/name`. Custom repo runs clone the repository into that
-run's local artifact folder and benchmark it with the same engines. Generated
+run's local artifact folder and benchmark it with the same engines. The HUD can
+export a completed run as JSON, including the repository name, resolved CodeRAG
+configuration, engine metrics, and Spectrum low-rank/miss debug trace. Generated
 run artifacts are written under `benchmark_hud/runs/` and are ignored by Git.
+
+The HUD currently uses `retrieval_mode: "coderag"` for Spectrum. The
+`Fast`/`Balanced`/`Accurate` buttons switch the CodeRAG rerank depth and scoring
+profile, not the generic Spectrum codec or index format.
 
 The project explores a simple idea:
 
@@ -114,7 +258,7 @@ Current dictionary support includes:
 * C / C++
 * Go
 * C#
-* shell
+* Shell / PowerShell
 * JSON / YAML / TOML
 * English text
 
@@ -216,9 +360,11 @@ The full ecosystem plan is tracked in `docs/ecosystem_architecture.md`. The
 developer manual for the SDKs, CLI, HTTP API, and RAG workflows is
 `ECOSYSTEM_MANUAL.md`.
 
-## Try The Demo
+## Try The Legacy Benchmark Demo
 
-Install or update the local CLI from this checkout:
+The published `spectrumstore` preview focuses on `pack`, `search`, `verify`,
+and `unpack`. The older guided benchmark demo still runs from the legacy CLI in
+this checkout:
 
 ```powershell
 cd "CLI Tool"
@@ -302,13 +448,47 @@ Use `spectrum` for the public CLI command. The older `spec` command remains avai
 
 ---
 
-## Code Reranking Profiles
+## Spectrum CodeRAG Mode
 
-Code search can run Spectrum BM25 first, then rerank a bounded candidate set
-with code-aware sidecar signals: path parts, filename parts, identifiers,
-function/class/export/import names, and cheap proximity matches.
+Spectrum CodeRAG is the repo-aware retrieval mode used by the Benchmark HUD for
+code assistant tasks. It is deliberately separate from generic Spectrum
+retrieval. CodeRAG adds ranking signals that make sense for repositories:
 
-The production benchmark exposes this with `--spectrum-rerank`:
+* exact filename and path-stem matches,
+* source/config/doc path intent,
+* dotfile and package/plugin manifest handling,
+* environment disambiguation such as production vs staging and lite vs full,
+* root config preference over nested config when the query does not ask for a
+  nested app path,
+* penalties for generic docs, benchmark files, advisory folders, and sibling
+  files that match broad identifiers while missing the most specific query term,
+* deterministic tie-breaks using exact filename/stem, path specificity, fewer
+  extra filename terms, and shallower paths.
+
+These are **not** global Spectrum retrieval defaults. Base Spectrum serving can
+still use a neutral `CodeRerankProfile(mode="base")`, while CodeRAG uses
+`coderag_rerank_profile(...)`. This keeps future document, memory, archive, or
+general text retrieval tuning isolated from repo-specific CodeRAG heuristics.
+
+User-facing switching is partial today:
+
+* The Benchmark HUD switches CodeRAG quality profiles with
+  `Fast` / `Balanced` / `Accurate`.
+* The HUD does not yet expose a generic `base` vs `coderag` mode selector; it is
+  intentionally a CodeRAG benchmark surface.
+* Programmatic callers can choose the profile object they pass into
+  `SpectrumServingRetriever`: neutral base profile or CodeRAG profile.
+
+---
+
+## CodeRAG Reranking Profiles
+
+CodeRAG runs Spectrum BM25 first, then reranks a bounded candidate set with
+repo-aware sidecar signals: path parts, filename parts, identifiers,
+function/class/export/import names, environment/config/doc cues, and cheap
+proximity matches.
+
+The production benchmark currently exposes this with `--spectrum-rerank`:
 
 | Profile | Candidate rerank depth | Intended use |
 |---|---:|---|

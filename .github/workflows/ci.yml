@@ -27,7 +27,5 @@ jobs:
         run: python scripts/test.py
       - name: Validate npm package contents
         run: npm pack --dry-run
-      - name: Smoke test installed npm CLI
-        run: |
-          npm install -g .
-          spectrum --help
+      - name: Smoke test packed npm CLI
+        run: npm run smoke:packed

@@ -15,6 +15,7 @@ import dictionary as D
 PACK_FORMAT = "spectrum.specpack"
 PACK_VERSION = 1
 PACK_COMPRESSION = zipfile.ZIP_STORED
+PACK_INDEX_NAME = "index.bin"
 
 SUPPORTED_EXTENSIONS = {
     ".py", ".html", ".htm", ".js", ".mjs", ".cjs", ".css", ".txt", ".md",
@@ -56,6 +57,14 @@ def _safe_join(root: Path, relative: str, *, field: str) -> Path:
     if target != root_resolved and root_resolved not in target.parents:
         raise ValueError(f"unsafe {field} path: {relative!r}")
     return target
+
+
+def _entry_to_manifest(entry: PackEntry) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in entry.__dict__.items()
+        if value is not None
+    }
 
 
 def _load_manifest(archive: zipfile.ZipFile) -> dict:
@@ -162,14 +171,7 @@ def pack(
             "version": PACK_VERSION,
             "dict_version": D.DICT_VERSION,
             "source_root": source.name,
-            "entries": [
-                {
-                    key: value
-                    for key, value in entry.__dict__.items()
-                    if value is not None
-                }
-                for entry in entries
-            ],
+            "entries": [_entry_to_manifest(entry) for entry in entries],
         }
 
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +181,126 @@ def pack(
                 archive.write(tmp / entry.spec, entry.spec)
 
     return inspect_pack(output)
+
+
+def append_to_pack(
+    pack_path: str | Path,
+    input_path: str | Path,
+    *,
+    output_path: str | Path | None = None,
+    include_all: bool = False,
+    language: str | int | None = None,
+    rle: str = "off",
+    zlib_level: int = 9,
+    verbose: bool = False,
+    replace: bool = False,
+    metadata_by_source: dict[str, dict[str, Any]] | None = None,
+    ids_by_source: dict[str, str] | None = None,
+) -> dict:
+    """Append source files to an existing `.specpack`.
+
+    The archive is rewritten through a temporary file so existing members are
+    preserved and the manifest is updated atomically when appending in place.
+    Existing source paths are rejected unless `replace=True`.
+    """
+    pack_file = Path(pack_path).expanduser().resolve()
+    source = Path(input_path).expanduser().resolve()
+    output = Path(output_path).expanduser().resolve() if output_path else pack_file
+    if not pack_file.exists():
+        raise FileNotFoundError(pack_file)
+    if pack_file.suffix.lower() != ".specpack":
+        raise ValueError("pack path must end with .specpack")
+    if output.suffix.lower() != ".specpack":
+        raise ValueError("output path must end with .specpack")
+    if not source.exists():
+        raise FileNotFoundError(source)
+
+    base = source.parent if source.is_file() else source
+    files = list(iter_source_files(source, include_all=include_all))
+    if not files:
+        raise ValueError(f"no encodable files found under {source}")
+
+    with SpectrumPack.open(pack_file) as opened:
+        manifest = dict(opened.manifest)
+        existing_entries = list(opened.entries)
+        existing_members = set(opened._zip.namelist())
+
+    existing_by_source = {entry.source: entry for entry in existing_entries}
+    new_sources: set[str] = set()
+    encoded_entries: list[PackEntry] = []
+
+    with tempfile.TemporaryDirectory(prefix="spectrum-core-append-") as tmp_name:
+        tmp = Path(tmp_name)
+        for file_path in files:
+            rel = Path(file_path.name) if source.is_file() else file_path.relative_to(base)
+            source_name = _posix(rel)
+            if source_name in new_sources:
+                raise ValueError(f"duplicate appended source path: {source_name}")
+            if source_name in existing_by_source and not replace:
+                raise ValueError(f"source already exists in pack: {source_name}")
+            new_sources.add(source_name)
+
+            spec_rel = Path("files") / Path(str(rel) + ".spec")
+            spec_name = _posix(spec_rel)
+            if spec_name in existing_members and source_name not in existing_by_source and not replace:
+                raise ValueError(f"spec member already exists in pack: {spec_name}")
+
+            spec_path = tmp / spec_rel
+            result = encode_file(
+                file_path,
+                spec_path,
+                language=language,
+                rle=rle,
+                zlib_level=zlib_level,
+                verbose=verbose,
+            )
+            encoded_entries.append(
+                PackEntry(
+                    source=source_name,
+                    spec=spec_name,
+                    original_size=result.original_size,
+                    spec_size=result.spec_size,
+                    source_id=(ids_by_source or {}).get(source_name),
+                    metadata=(metadata_by_source or {}).get(source_name),
+                )
+            )
+
+        removed_specs = {
+            existing_by_source[source_name].spec
+            for source_name in new_sources
+            if source_name in existing_by_source
+        }
+        kept_entries = [entry for entry in existing_entries if entry.source not in new_sources]
+        merged_entries = [*kept_entries, *encoded_entries]
+        manifest["entries"] = [_entry_to_manifest(entry) for entry in merged_entries]
+
+        tmp_zip = tmp / output.name
+        with zipfile.ZipFile(pack_file) as source_archive, zipfile.ZipFile(
+            tmp_zip, "w", compression=PACK_COMPRESSION
+        ) as target_archive:
+            for item in source_archive.infolist():
+                if item.filename == "manifest.json":
+                    continue
+                if item.filename == PACK_INDEX_NAME:
+                    continue
+                if item.filename in removed_specs:
+                    continue
+                target_archive.writestr(item, source_archive.read(item.filename))
+            target_archive.writestr("manifest.json", json.dumps(manifest, indent=2))
+            for entry in encoded_entries:
+                target_archive.write(tmp / entry.spec, entry.spec)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output == pack_file:
+            tmp_zip.replace(pack_file)
+        else:
+            output.write_bytes(tmp_zip.read_bytes())
+
+    summary = inspect_pack(output)
+    summary["appended_entries"] = len(encoded_entries)
+    summary["replaced_entries"] = len(removed_specs)
+    summary["dropped_embedded_index"] = PACK_INDEX_NAME in existing_members
+    return summary
 
 
 def unpack(

@@ -12,6 +12,7 @@ from .cpp_tokenizer import tokenise_cpp
 from .go_tokenizer import tokenise_go
 from .csharp_tokenizer import tokenise_csharp
 from .shell_tokenizer import tokenise_shell
+from .powershell_tokenizer import tokenise_powershell
 from .config_tokenizer import tokenise_config
 from .xml_tokenizer import tokenize_xml_compatible_source
 
@@ -30,6 +31,7 @@ __all__ = [
     "tokenise_go",
     "tokenise_csharp",
     "tokenise_shell",
+    "tokenise_powershell",
     "tokenise_config",
     "tokenize_xml_compatible_source",
 ]

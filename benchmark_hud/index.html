@@ -11,8 +11,8 @@
     <main class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">SPECTRUM BENCHMARK HUD</p>
-          <h1>Live retrieval league</h1>
+          <p class="eyebrow">SPECTRUM CODERAG BENCHMARK</p>
+          <h1>Repo retrieval HUD</h1>
         </div>
         <div class="status-bank">
           <div>
@@ -41,6 +41,14 @@
           <span>GitHub repo</span>
           <input id="repoInput" type="url" placeholder="owner/name or https://github.com/owner/name" spellcheck="false" />
         </label>
+        <div class="profile-control" aria-label="Spectrum profile">
+          <span>Spectrum profile</span>
+          <div class="profile-group" id="profileGroup">
+            <button class="preset" data-profile="fast">Fast</button>
+            <button class="preset" data-profile="balanced">Balanced</button>
+            <button class="preset active" data-profile="accurate">Accurate</button>
+          </div>
+        </div>
         <label class="query-control">
           <span>Queries</span>
           <input id="queryCount" type="range" min="6" max="90" value="18" />
@@ -71,7 +79,7 @@
       <section class="chart-row">
         <div class="panel">
           <div class="panel-head">
-            <span>SIZE PRESSURE</span>
+            <span>STORAGE DENSITY</span>
             <strong>STORE / RAW</strong>
           </div>
           <canvas id="sizeChart" height="150"></canvas>
@@ -85,10 +93,17 @@
         </div>
         <div class="panel">
           <div class="panel-head">
-            <span>ACCURACY TRACE</span>
+            <span>CONTEXT QUALITY</span>
             <strong>MRR</strong>
           </div>
           <canvas id="accuracyChart" height="150"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <span>RECONSTRUCTION</span>
+            <strong>DETERMINISTIC</strong>
+          </div>
+          <canvas id="reconstructChart" height="150"></canvas>
         </div>
       </section>
     </main>
@@ -100,7 +115,10 @@
             <p class="eyebrow">BENCHMARK COMPLETE</p>
             <h2 id="summaryTitle">Run metrics</h2>
           </div>
-          <button id="closeModal" class="icon-command" aria-label="Close">X</button>
+          <div class="modal-actions">
+            <button id="exportSummary" class="command">Export result</button>
+            <button id="closeModal" class="icon-command" aria-label="Close">X</button>
+          </div>
         </header>
         <div id="summaryBody" class="modal-body"></div>
       </div>

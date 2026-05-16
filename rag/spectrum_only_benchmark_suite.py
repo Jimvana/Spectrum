@@ -43,8 +43,10 @@ from spec_format.spec_encoder import (
     LANGUAGE_JAVA,
     LANGUAGE_JS,
     LANGUAGE_PHP,
+    LANGUAGE_POWERSHELL,
     LANGUAGE_PYTHON,
     LANGUAGE_RUST,
+    LANGUAGE_SHELL,
     LANGUAGE_SQL,
     LANGUAGE_TEXT,
     LANGUAGE_TS,
@@ -57,7 +59,9 @@ from tokenizers.html_tokenizer import tokenise_html
 from tokenizers.java_tokenizer import tokenise_java
 from tokenizers.js_tokenizer import tokenise_js
 from tokenizers.php_tokenizer import tokenise_php
+from tokenizers.powershell_tokenizer import tokenise_powershell
 from tokenizers.rust_tokenizer import tokenise_rust
+from tokenizers.shell_tokenizer import tokenise_shell
 from tokenizers.sql_tokenizer import tokenise_sql
 from tokenizers.text_tokenizer import reconstruct_text, tokenize_text
 from tokenizers.ts_tokenizer import tokenise_ts
@@ -84,6 +88,8 @@ TOKENIZER_BY_LANG = {
     LANGUAGE_RUST: tokenise_rust,
     LANGUAGE_PHP: tokenise_php,
     LANGUAGE_JAVA: tokenise_java,
+    LANGUAGE_SHELL: tokenise_shell,
+    LANGUAGE_POWERSHELL: tokenise_powershell,
 }
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9']+")
 

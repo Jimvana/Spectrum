@@ -692,7 +692,7 @@ Request:
 A local server could run like this:
 
 ```bash
-spectrum server --pack ./memory.specpack --port 7777
+spectrum serve ./memory.specpack --port 7777
 ```
 
 Then an agent could call:
@@ -1794,4 +1794,3 @@ The most important immediate goal is not to beat every vector database or search
 > Spectrum can store real-world memory, code, and document corpora more compactly than raw text stores, retrieve from them quickly, and reconstruct the source data losslessly.
 
 Once that is clearly proven, the ecosystem around Spectrum can grow naturally.
-

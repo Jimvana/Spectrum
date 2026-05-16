@@ -6,6 +6,7 @@ from pathlib import Path
 
 from spectrum_core import (
     SpectrumPack,
+    append_to_pack,
     decode_member,
     decode_file,
     encode_file,
@@ -105,3 +106,52 @@ def test_decode_member_decodes_one_source(tmp_path: Path) -> None:
 
     assert result.ok
     assert output.read_text(encoding="utf-8") == "Selective hydration works.\n"
+
+
+def test_append_to_pack_preserves_existing_and_adds_new_source(tmp_path: Path) -> None:
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    (source_dir / "README.md").write_bytes(b"# Demo\r\n")
+    pack_path = tmp_path / "docs.specpack"
+    pack(source_dir, pack_path)
+
+    append_dir = tmp_path / "append"
+    append_dir.mkdir()
+    (append_dir / "agent.md").write_text("SSH alias and deploy notes.\n", encoding="utf-8")
+
+    summary = append_to_pack(pack_path, append_dir)
+    decoded_dir = tmp_path / "decoded"
+    results = unpack(pack_path, decoded_dir)
+
+    assert summary["entries"] == 2
+    assert summary["appended_entries"] == 1
+    assert summary["replaced_entries"] == 0
+    assert all(result.ok for result in results)
+    assert (decoded_dir / "README.md").read_bytes() == b"# Demo\r\n"
+    assert (decoded_dir / "agent.md").read_text(encoding="utf-8") == "SSH alias and deploy notes.\n"
+
+
+def test_append_to_pack_rejects_conflicts_unless_replace(tmp_path: Path) -> None:
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    note = source_dir / "note.md"
+    note.write_text("old\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(source_dir, pack_path)
+
+    note.write_text("new\n", encoding="utf-8")
+    try:
+        append_to_pack(pack_path, note)
+    except ValueError as exc:
+        assert "source already exists" in str(exc)
+    else:
+        raise AssertionError("append accepted a duplicate source path without replace")
+
+    summary = append_to_pack(pack_path, note, replace=True)
+    output = tmp_path / "note.md"
+    result = decode_member(pack_path, "note.md", output)
+
+    assert summary["entries"] == 1
+    assert summary["replaced_entries"] == 1
+    assert result.ok
+    assert output.read_text(encoding="utf-8") == "new\n"

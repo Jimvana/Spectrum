@@ -184,7 +184,7 @@ def make_snapshot(root: Path, version: int | None = None) -> Path:
     _write_readme(dest_dir, version, token_count, languages,
                   [p for _, p in pairs])
 
-    print(f"✓  Snapshot created: versions/v{version}/")
+    print(f"OK  Snapshot created: versions/v{version}/")
     print(f"   {len(copied)} file(s) copied")
     print(f"   Token count: {token_count:,}")
     print(f"   Languages:   {', '.join(languages)}")
@@ -204,7 +204,7 @@ def list_snapshots(root: Path) -> None:
         return
 
     print(f"{'Version':<10} {'Token count':<16} {'Date':<14} Languages")
-    print("─" * 70)
+    print("-" * 70)
 
     for snap in snapshots:
         if not snap.is_dir():

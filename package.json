@@ -1,18 +1,26 @@
 {
   "name": "spectrumstore",
-  "version": "0.1.0-preview.0",
+  "version": "0.1.0-preview.4",
   "description": "Spectrum Store Developer Preview: local-first lossless searchable .specpack stores.",
+  "scripts": {
+    "test": "python scripts/test.py",
+    "smoke:packed": "node scripts/smoke-packed-cli.mjs"
+  },
   "bin": {
-    "spectrum": "./bin/spectrumstore.js",
-    "spectrumstore": "./bin/spectrumstore.js"
+    "spectrum": "bin/spectrumstore.js",
+    "spectrumstore": "bin/spectrumstore.js"
   },
   "files": [
     "bin",
+    "docs/*.md",
+    "demo/sample-code/**",
     "packages/core/src/**/*.py",
     "packages/index/src/**/*.py",
     "packages/cli/src/**/*.py",
+    "packages/server/src/**/*.py",
     "CLI Tool/vendor/spectrum_algo/**/*.py",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {

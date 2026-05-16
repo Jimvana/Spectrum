@@ -54,6 +54,7 @@ output_images/
 spec compressed/
 *.spec
 *.specpack
+*.tgz
 
 # Local logs and generated reports
 *.log

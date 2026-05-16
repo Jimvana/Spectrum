@@ -6,9 +6,9 @@ Spectrum has a working lossless `.spec` codec, append-only dictionary snapshots,
 retrieval indexing, codebase benchmark tooling, production-shaped serving, and
 optional native decode acceleration.
 
-Dictionary v12 currently covers Python, HTML, JavaScript, TypeScript, CSS, SQL,
-Rust, PHP, XML-compatible payloads, Java, C, C++, Go, C#, shell, JSON, YAML,
-TOML, and English text. The XML-compatible language path is retained for
+Dictionary v13 currently covers Python, HTML, JavaScript, TypeScript, CSS, SQL,
+Rust, PHP, XML-compatible payloads, Java, C, C++, Go, C#, Shell, PowerShell,
+JSON, YAML, TOML, and English text. The XML-compatible language path is retained for
 backwards compatibility and dictionary coverage.
 
 ## Recently Stabilized
