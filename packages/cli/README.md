@@ -51,6 +51,7 @@ spectrum hub -b
 spectrum hub -a
 spectrum hub -s
 spectrum hub -v
+spectrum hub --gui
 ```
 
 The hub commands are interactive wrappers around `project init`, `project add`,
@@ -58,6 +59,35 @@ and `project serve`. `hub -v` discovers local listening ports, probes them for
 the Spectrum API, and reports the dashboard and agent context URLs for running
 servers. If none respond, it prints `No spectrum servers operating`. Use
 `--ports 7777,7778` when you want to check an explicit list.
+
+`spectrum hub --gui` opens the desktop Spectrum Hub. It can create or open a
+`.specpack`, show the loaded pack name and size, start a local server without a
+terminal window, open the dashboard, and stage dropped documents for a confirmed
+append. Build the Windows app with:
+
+```powershell
+npm run deps:hub-gui
+npm run build:hub-gui
+```
+
+The build output is `dist/SpectrumHub/SpectrumHub.exe`. Installing
+`tkinterdnd2` before the build enables native drag and drop in the packaged app.
+
+Build the Windows installer with Inno Setup 6:
+
+```powershell
+winget install JRSoftware.InnoSetup
+npm run build:hub-gui-installer
+```
+
+The installer wraps the complete PyInstaller folder, so end users do not need
+Python, PyInstaller, `tkinterdnd2`, or the Spectrum source checkout installed.
+It installs `SpectrumHub.exe`, bundled Python/runtime files, packaged Spectrum
+modules, the drag/drop support files, and the Spectrum codec runtime.
+Close any running Spectrum Hub window before rebuilding; Windows keeps bundled
+DLLs locked while the app is open.
+The packaged app requests administrator rights on launch, so Windows will show
+a UAC prompt before opening Spectrum Hub.
 
 If an appended source path already exists, `append` fails unless `--replace` is
 passed. Appending removes embedded `index.bin` so searches do not silently use a

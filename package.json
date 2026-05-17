@@ -4,7 +4,13 @@
   "description": "Spectrum Store Developer Preview: local-first lossless searchable .specpack stores.",
   "scripts": {
     "test": "python scripts/test.py",
-    "smoke:packed": "node scripts/smoke-packed-cli.mjs"
+    "smoke:packed": "node scripts/smoke-packed-cli.mjs",
+    "deps:hub-gui": "python -m pip install --user --upgrade pyinstaller tkinterdnd2 pillow",
+    "build:hub-gui": "python scripts/build-hub-gui.py",
+    "build:hub-gui:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-hub-gui-exe.ps1",
+    "build:hub-gui:macos": "python scripts/build-hub-gui.py --platform macos",
+    "build:hub-gui:linux": "python scripts/build-hub-gui.py --platform linux",
+    "build:hub-gui-installer": "powershell -ExecutionPolicy Bypass -File scripts/build-hub-gui-installer.ps1"
   },
   "bin": {
     "spectrum": "bin/spectrumstore.js",
@@ -17,7 +23,13 @@
     "packages/core/src/**/*.py",
     "packages/index/src/**/*.py",
     "packages/cli/src/**/*.py",
+    "packages/cli/src/spectrum_cli/assets/*",
     "packages/server/src/**/*.py",
+    "installer/SpectrumHub.iss",
+    "scripts/build-hub-gui.py",
+    "scripts/install-hub-gui-build-deps.ps1",
+    "scripts/build-hub-gui-exe.ps1",
+    "scripts/build-hub-gui-installer.ps1",
     "CLI Tool/vendor/spectrum_algo/**/*.py",
     "README.md",
     "CHANGELOG.md",

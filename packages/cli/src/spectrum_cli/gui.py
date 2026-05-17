@@ -1,0 +1,439 @@
+from __future__ import annotations
+
+import argparse
+import queue
+import os
+import sys
+import threading
+import webbrowser
+from dataclasses import dataclass
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
+import tkinter as tk
+
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    for bundled_runtime in [
+        Path(sys._MEIPASS) / "spectrum_runtime",
+        Path(sys._MEIPASS) / "CLI Tool" / "vendor" / "spectrum_algo",
+    ]:
+        if (bundled_runtime / "dictionary.py").exists() and (bundled_runtime / "spec_format").exists():
+            os.environ.setdefault("SPECTRUM_REPO_ROOT", str(bundled_runtime))
+            break
+
+from spectrum_core import append_to_pack, inspect_pack, verify_pack
+from spectrum_index import build_index
+from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
+
+from spectrum_cli.main import _default_project_pack_path, command_project_init
+
+
+HOST = "127.0.0.1"
+DEFAULT_PORT = 7777
+ASSET_DIR = Path("spectrum_cli") / "assets"
+
+
+@dataclass(frozen=True)
+class PackDetails:
+    path: Path
+    name: str
+    size_bytes: int
+    size_label: str
+    entries: int
+    source_root: str
+
+
+def format_bytes(size: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def load_pack_details(pack_path: str | Path) -> PackDetails:
+    path = Path(pack_path).expanduser().resolve()
+    if path.suffix.lower() != ".specpack":
+        raise ValueError("Select a .specpack file.")
+    summary = inspect_pack(path)
+    return PackDetails(
+        path=path,
+        name=path.stem,
+        size_bytes=path.stat().st_size,
+        size_label=format_bytes(path.stat().st_size),
+        entries=int(summary.get("entries", 0)),
+        source_root=str(summary.get("source_root") or ""),
+    )
+
+
+def _create_root():
+    try:
+        from tkinterdnd2 import TkinterDnD  # type: ignore
+
+        return TkinterDnD.Tk(), True
+    except Exception:
+        return tk.Tk(), False
+
+
+def asset_path(name: str) -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / ASSET_DIR / name
+    return Path(__file__).resolve().parent / "assets" / name
+
+
+class SpectrumHubGui:
+    def __init__(self, root: tk.Tk, *, drag_drop_available: bool) -> None:
+        self.root = root
+        self.drag_drop_available = drag_drop_available
+        self.pack_path: Path | None = None
+        self.pending_paths: list[Path] = []
+        self.server: SpectrumServer | None = None
+        self.server_thread: threading.Thread | None = None
+        self.status_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        self.icon_image: tk.PhotoImage | None = None
+
+        self.pack_name_var = tk.StringVar(value="No specpack loaded")
+        self.pack_detail_var = tk.StringVar(value="Select or create a specpack to begin.")
+        self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
+        self.server_var = tk.StringVar(value="Server stopped")
+        self.replace_var = tk.BooleanVar(value=False)
+        self.append_status_var = tk.StringVar(value="Drop documents here, then confirm append.")
+
+        self._build()
+        self._poll_status_queue()
+
+    def _build(self) -> None:
+        self.root.title("Spectrum Hub")
+        self.root.geometry("720x520")
+        self.root.minsize(620, 460)
+        self._apply_icon()
+
+        style = ttk.Style()
+        style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"))
+        style.configure("Status.TLabel", foreground="#4b5563")
+
+        main = ttk.Frame(self.root, padding=18)
+        main.grid(row=0, column=0, sticky="nsew")
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(3, weight=1)
+
+        header = ttk.Frame(main)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        header.columnconfigure(1, weight=1)
+        if self.icon_image is not None:
+            ttk.Label(header, image=self.icon_image).grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 12))
+        ttk.Label(header, textvariable=self.pack_name_var, style="Title.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(header, textvariable=self.pack_detail_var, style="Status.TLabel").grid(row=1, column=1, sticky="w")
+
+        pack_actions = ttk.Frame(main)
+        pack_actions.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        pack_actions.columnconfigure(4, weight=1)
+        ttk.Button(pack_actions, text="Open Specpack", command=self.open_specpack).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(pack_actions, text="Create Specpack", command=self.create_specpack).grid(row=0, column=1, padx=(0, 8))
+        ttk.Label(pack_actions, text="Port").grid(row=0, column=2, padx=(8, 6))
+        ttk.Entry(pack_actions, textvariable=self.port_var, width=8).grid(row=0, column=3, padx=(0, 8))
+
+        server_actions = ttk.Frame(main)
+        server_actions.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        server_actions.columnconfigure(4, weight=1)
+        ttk.Button(server_actions, text="Start Server", command=self.start_server).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(server_actions, text="Stop Server", command=self.stop_server).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(server_actions, text="Open Dashboard", command=self.open_dashboard).grid(row=0, column=2, padx=(0, 8))
+        ttk.Label(server_actions, textvariable=self.server_var, style="Status.TLabel").grid(row=0, column=3, sticky="w")
+
+        append = ttk.LabelFrame(main, text="Append Documents", padding=12)
+        append.grid(row=3, column=0, sticky="nsew")
+        append.columnconfigure(0, weight=1)
+        append.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(append)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        top.columnconfigure(4, weight=1)
+        ttk.Button(top, text="Add Files", command=self.add_files).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(top, text="Add Folder", command=self.add_folder).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(top, text="Clear", command=self.clear_pending).grid(row=0, column=2, padx=(0, 8))
+        ttk.Checkbutton(top, text="Replace existing paths", variable=self.replace_var).grid(row=0, column=3, padx=(0, 8))
+
+        self.pending_list = tk.Listbox(append, activestyle="none", selectmode=tk.EXTENDED)
+        self.pending_list.grid(row=1, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(append, orient="vertical", command=self.pending_list.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        self.pending_list.configure(yscrollcommand=scrollbar.set)
+
+        self.drop_label = ttk.Label(append, textvariable=self.append_status_var, style="Status.TLabel")
+        self.drop_label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+        bottom = ttk.Frame(main)
+        bottom.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        bottom.columnconfigure(0, weight=1)
+        ttk.Label(bottom, textvariable=self.append_status_var, style="Status.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(bottom, text="Confirm Append", command=self.confirm_append).grid(row=0, column=1, sticky="e")
+
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self._enable_drag_drop()
+
+    def _apply_icon(self) -> None:
+        icon_png = asset_path("spec-icon.png")
+        icon_ico = asset_path("spec-icon.ico")
+        try:
+            if icon_ico.exists():
+                self.root.iconbitmap(default=str(icon_ico))
+            if icon_png.exists():
+                self.icon_image = tk.PhotoImage(file=str(icon_png))
+                self.root.iconphoto(True, self.icon_image)
+        except tk.TclError:
+            self.icon_image = None
+
+    def _enable_drag_drop(self) -> None:
+        if not self.drag_drop_available:
+            self.append_status_var.set(
+                "Drag/drop needs tkinterdnd2 in this Python. Use Add Files or package with the optional drag-drop dependency."
+            )
+            return
+        try:
+            from tkinterdnd2 import DND_FILES  # type: ignore
+
+            self.pending_list.drop_target_register(DND_FILES)
+            self.pending_list.dnd_bind("<<Drop>>", self._on_drop)
+            self.append_status_var.set("Drop documents here, then confirm append.")
+        except Exception as exc:
+            self.append_status_var.set(f"Drag/drop unavailable: {exc}. Use Add Files instead.")
+
+    def _on_drop(self, event) -> None:
+        values = [Path(item) for item in self.root.tk.splitlist(event.data)]
+        self.stage_paths(values)
+
+    def _poll_status_queue(self) -> None:
+        try:
+            while True:
+                kind, message = self.status_queue.get_nowait()
+                if kind == "server":
+                    self.server_var.set(message)
+                else:
+                    self.append_status_var.set(message)
+        except queue.Empty:
+            pass
+        self.root.after(150, self._poll_status_queue)
+
+    def _require_pack(self) -> Path | None:
+        if self.pack_path is None:
+            messagebox.showinfo("Spectrum Hub", "Open or create a .specpack first.")
+            return None
+        return self.pack_path
+
+    def _port(self) -> int | None:
+        try:
+            port = int(self.port_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Spectrum Hub", "Port must be a number.")
+            return None
+        if not 0 < port < 65536:
+            messagebox.showerror("Spectrum Hub", "Port must be between 1 and 65535.")
+            return None
+        return port
+
+    def open_specpack(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="Open Spectrum specpack",
+            filetypes=[("Spectrum specpack", "*.specpack"), ("All files", "*.*")],
+        )
+        if filename:
+            self.set_pack(filename)
+
+    def create_specpack(self) -> None:
+        source = filedialog.askdirectory(title="Select project folder to pack")
+        if not source:
+            return
+        source_path = Path(source)
+        default_output = _default_project_pack_path(source_path)
+        output = filedialog.asksaveasfilename(
+            title="Save Spectrum specpack",
+            initialdir=str(default_output.parent),
+            initialfile=default_output.name,
+            defaultextension=".specpack",
+            filetypes=[("Spectrum specpack", "*.specpack")],
+        )
+        if not output:
+            return
+        name = simpledialog.askstring("Project name", "Specpack/project name", initialvalue=source_path.name)
+        if not name:
+            return
+        port = self._port()
+        if port is None:
+            return
+
+        self.append_status_var.set("Creating specpack...")
+        self.root.update_idletasks()
+        try:
+            code = command_project_init(
+                argparse.Namespace(
+                    source=str(source_path),
+                    output=output,
+                    name=name,
+                    replace_template=False,
+                    no_index=False,
+                    port=port,
+                    all=True,
+                    language=None,
+                    rle="off",
+                    zlib_level=9,
+                    verbose=False,
+                    json=True,
+                )
+            )
+            if code:
+                raise RuntimeError("Specpack creation failed.")
+            self.set_pack(output)
+            self.append_status_var.set("Specpack created.")
+        except Exception as exc:
+            messagebox.showerror("Spectrum Hub", str(exc))
+            self.append_status_var.set("Specpack creation failed.")
+
+    def set_pack(self, pack_path: str | Path) -> None:
+        try:
+            details = load_pack_details(pack_path)
+        except Exception as exc:
+            messagebox.showerror("Spectrum Hub", str(exc))
+            return
+        self.pack_path = details.path
+        self.pack_name_var.set(details.name)
+        root = f" | source root: {details.source_root}" if details.source_root else ""
+        self.pack_detail_var.set(f"{details.path} | {details.size_label} | {details.entries} documents{root}")
+
+    def add_files(self) -> None:
+        filenames = filedialog.askopenfilenames(title="Select documents to append")
+        self.stage_paths(Path(filename) for filename in filenames)
+
+    def add_folder(self) -> None:
+        folder = filedialog.askdirectory(title="Select folder to append")
+        if folder:
+            self.stage_paths([Path(folder)])
+
+    def stage_paths(self, paths) -> None:
+        added = 0
+        existing = {path.resolve() for path in self.pending_paths if path.exists()}
+        for path in paths:
+            candidate = Path(path).expanduser()
+            if not candidate.exists():
+                continue
+            resolved = candidate.resolve()
+            if resolved in existing:
+                continue
+            self.pending_paths.append(resolved)
+            existing.add(resolved)
+            self.pending_list.insert(tk.END, str(resolved))
+            added += 1
+        total = len(self.pending_paths)
+        self.append_status_var.set(f"Staged {total} item{'s' if total != 1 else ''}." if added else "No new files were staged.")
+
+    def clear_pending(self) -> None:
+        self.pending_paths.clear()
+        self.pending_list.delete(0, tk.END)
+        self.append_status_var.set("Staged list cleared.")
+
+    def confirm_append(self) -> None:
+        pack = self._require_pack()
+        if pack is None:
+            return
+        if not self.pending_paths:
+            messagebox.showinfo("Spectrum Hub", "Add or drop documents before confirming.")
+            return
+        count = len(self.pending_paths)
+        if not messagebox.askyesno("Confirm append", f"Append {count} item{'s' if count != 1 else ''} to {pack.name}?"):
+            return
+        paths = list(self.pending_paths)
+        replace = self.replace_var.get()
+        threading.Thread(target=self._append_worker, args=(pack, paths, replace), daemon=True).start()
+
+    def _append_worker(self, pack: Path, paths: list[Path], replace: bool) -> None:
+        try:
+            self.status_queue.put(("append", "Appending documents..."))
+            appended = 0
+            replaced = 0
+            for path in paths:
+                summary = append_to_pack(pack, path, include_all=True, replace=replace)
+                appended += int(summary.get("appended_entries", 0))
+                replaced += int(summary.get("replaced_entries", 0))
+            verify = verify_pack(pack).to_dict()
+            if not verify.get("valid"):
+                raise RuntimeError("Pack append completed, but verification failed.")
+            index = build_index(pack, embed=True)
+            self.root.after(0, self._after_append_success, appended, replaced, int(index.get("documents", 0)))
+        except Exception as exc:
+            self.status_queue.put(("append", f"Append failed: {exc}"))
+            self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
+
+    def _after_append_success(self, appended: int, replaced: int, indexed_docs: int) -> None:
+        self.clear_pending()
+        if self.pack_path is not None:
+            self.set_pack(self.pack_path)
+        self.append_status_var.set(
+            f"Appended {appended} document{'s' if appended != 1 else ''}; "
+            f"replaced {replaced}; indexed {indexed_docs}."
+        )
+
+    def start_server(self) -> None:
+        pack = self._require_pack()
+        if pack is None:
+            return
+        port = self._port()
+        if port is None:
+            return
+        if self.server is not None:
+            self.server_var.set(f"Server already running at http://{HOST}:{port}/project")
+            return
+        try:
+            registry = PackRegistry()
+            registry.add("repo", pack)
+            server = SpectrumServer((HOST, port), create_handler(registry), quiet=True)
+        except Exception as exc:
+            messagebox.showerror("Spectrum Hub", str(exc))
+            self.server_var.set("Server failed to start")
+            return
+
+        self.server = server
+        self.server_thread = threading.Thread(target=self._serve_forever, daemon=True)
+        self.server_thread.start()
+        self.server_var.set(f"Server running at http://{HOST}:{port}/project")
+
+    def _serve_forever(self) -> None:
+        assert self.server is not None
+        try:
+            self.server.serve_forever()
+        except Exception as exc:
+            self.status_queue.put(("server", f"Server stopped: {exc}"))
+
+    def stop_server(self) -> None:
+        if self.server is None:
+            self.server_var.set("Server stopped")
+            return
+        server = self.server
+        self.server = None
+        server.shutdown()
+        server.server_close()
+        self.server_var.set("Server stopped")
+
+    def open_dashboard(self) -> None:
+        port = self._port()
+        if port is not None:
+            webbrowser.open(f"http://{HOST}:{port}/project")
+
+    def close(self) -> None:
+        self.stop_server()
+        self.root.destroy()
+
+
+def main() -> int:
+    root, drag_drop_available = _create_root()
+    app = SpectrumHubGui(root, drag_drop_available=drag_drop_available)
+    root.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

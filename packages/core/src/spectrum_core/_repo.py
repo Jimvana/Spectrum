@@ -12,6 +12,15 @@ def find_repo_root(start: Path | None = None) -> Path:
     if env_root:
         candidates.append(Path(env_root).expanduser())
 
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundle_root = Path(sys._MEIPASS)
+        candidates.extend(
+            [
+                bundle_root / "spectrum_runtime",
+                bundle_root / "CLI Tool" / "vendor" / "spectrum_algo",
+            ]
+        )
+
     here = start or Path(__file__).resolve()
     candidates.extend([here, *here.parents, Path.cwd(), *Path.cwd().parents])
 

@@ -181,6 +181,38 @@ spectrum hub -v
 - `hub -v` discovers local listening ports, reports Spectrum API servers, and
   prints `No spectrum servers operating` when none respond.
 
+Spectrum Hub also has a local desktop GUI:
+
+```powershell
+spectrum hub --gui
+```
+
+Build the GUI from this repository with PyInstaller:
+
+```bash
+npm run deps:hub-gui
+npm run build:hub-gui
+```
+
+Platform-specific build entry points are available for release jobs:
+
+```bash
+npm run build:hub-gui:windows
+npm run build:hub-gui:macos
+npm run build:hub-gui:linux
+```
+
+PyInstaller builds must run on the target operating system. Windows additionally
+has an Inno Setup installer target:
+
+```powershell
+npm run build:hub-gui-installer
+```
+
+The macOS target currently produces `dist/SpectrumHub.app`. The Linux target
+produces a portable `dist/SpectrumHub/` folder. DMG, signing/notarization,
+AppImage, and `.deb` packaging are intentionally separate release steps.
+
 The package name is `spectrumstore`, and it exposes both `spectrum` and
 `spectrumstore` commands. It requires Node.js 18+ and Python 3.10+ on `PATH`;
 the preview npm package bundles the Python Spectrum CLI, index layer, core API,

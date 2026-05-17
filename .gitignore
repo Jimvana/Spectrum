@@ -16,6 +16,8 @@ env/
 
 # Node/vendor output
 node_modules/
+build/
+dist/
 external_repos/
 deck_workspace/node_modules/
 deck_workspace/scratch/
@@ -52,6 +54,7 @@ spec_format/output/
 results/
 output_images/
 spec compressed/
+archive/
 *.spec
 *.specpack
 *.tgz

@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 from spectrum_core import pack
+from spectrum_cli.gui import asset_path, format_bytes, load_pack_details
 from spectrum_cli.main import main
 from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
 
@@ -56,6 +57,25 @@ raise SystemExit(main(["--help"]))
     )
     assert result.returncode == 0, result.stderr
     assert "Spectrum Store Developer Preview" in result.stdout
+
+
+def test_gui_pack_details_and_size_label(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("GUI pack detail test.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(docs, pack_path)
+
+    details = load_pack_details(pack_path)
+
+    assert details.name == "docs"
+    assert details.path == pack_path.resolve()
+    assert details.entries == 1
+    assert details.size_bytes == pack_path.stat().st_size
+    assert details.size_label.endswith(("B", "KB", "MB", "GB", "TB"))
+    assert format_bytes(1024) == "1.0 KB"
+    assert asset_path("spec-icon.png").exists()
+    assert asset_path("spec-icon.ico").exists()
 
 
 def test_cli_doctor_reports_install_health(capsys) -> None:

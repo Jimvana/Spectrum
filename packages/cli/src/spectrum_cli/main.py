@@ -746,6 +746,10 @@ def command_project(args: argparse.Namespace) -> int:
 
 
 def command_hub(args: argparse.Namespace) -> int:
+    if args.gui:
+        from spectrum_cli.gui import main as gui_main
+
+        return gui_main()
     if args.build:
         return command_hub_build(args)
     if args.append:
@@ -1250,6 +1254,7 @@ def build_parser() -> argparse.ArgumentParser:
     hub_actions.add_argument("-a", "--append", action="store_true", help="Walk through appending files to a specpack")
     hub_actions.add_argument("-s", "--serve", action="store_true", help="Walk through serving a specpack")
     hub_actions.add_argument("-v", "--verify-servers", action="store_true", help="Find running local Spectrum API servers")
+    hub.add_argument("--gui", action="store_true", help="Launch the Spectrum Hub desktop GUI")
     hub.add_argument("--name", help="Project/specpack name for build mode")
     hub.add_argument("--source", help="Project folder/location for build mode")
     hub.add_argument("--pack", help="Specpack path")
