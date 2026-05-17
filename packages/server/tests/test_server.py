@@ -139,12 +139,12 @@ def test_server_builds_project_context_bundle(tmp_path: Path) -> None:
             {
                 "sites": [
                     {
-                        "name": "bytespectrum",
-                        "domains": ["bytespectrum.cc"],
+                        "name": "example-site",
+                        "domains": ["example.com"],
                         "ssh": {
-                            "host": "145.241.234.63",
-                            "user": "ubuntu",
-                            "identity_file": "C:\\Users\\james\\.ssh\\spectrum_oci_ed25519",
+                            "host": "203.0.113.10",
+                            "user": "deploy",
+                            "identity_file": "C:\\Users\\example\\.ssh\\spectrum_example_ed25519",
                         },
                         "deploy": {"remote_path": "/var/www/spectrum"},
                     }
@@ -173,13 +173,13 @@ def test_server_builds_project_context_bundle(tmp_path: Path) -> None:
         assert "ssh-agent" in context_bundle["secret_references"]
         assert "status.md" in context_bundle["missing"]
         assert context_bundle["documents"][0]["path"] == ".spectrum-project/project.md"
-        assert context_bundle["ops"]["data"]["sites"][0]["name"] == "bytespectrum"
+        assert context_bundle["ops"]["data"]["sites"][0]["name"] == "example-site"
         assert context_bundle["readiness"]["ssh"]["ready"]
 
         status, ops = request(port, "GET", "/projects/repo/ops")
         assert status == 200
         assert ops["path"] == ".spectrum-project/ops.json"
-        assert ops["data"]["sites"][0]["ssh"]["user"] == "ubuntu"
+        assert ops["data"]["sites"][0]["ssh"]["user"] == "deploy"
 
         status, readiness = request(port, "GET", "/projects/repo/readiness")
         assert status == 200
@@ -207,11 +207,11 @@ def test_server_upserts_document_into_served_pack(tmp_path: Path) -> None:
     ops = {
         "sites": [
             {
-                "name": "bytespectrum",
+                "name": "example-site",
                 "ssh": {
-                    "host": "145.241.234.63",
-                    "user": "ubuntu",
-                    "identity_file": "C:\\Users\\james\\.ssh\\spectrum_oci_ed25519",
+                    "host": "203.0.113.10",
+                    "user": "deploy",
+                    "identity_file": "C:\\Users\\example\\.ssh\\spectrum_example_ed25519",
                 },
                 "deploy": {"remote_path": "/var/www/spectrum"},
             }
@@ -237,12 +237,12 @@ def test_server_upserts_document_into_served_pack(tmp_path: Path) -> None:
 
         status, hydrated = request(port, "GET", "/packs/repo/documents/.spectrum-project/ops.json")
         assert status == 200
-        assert json.loads(hydrated["content"])["sites"][0]["name"] == "bytespectrum"
+        assert json.loads(hydrated["content"])["sites"][0]["name"] == "example-site"
 
         status, live_ops = request(port, "GET", "/projects/repo/ops")
         assert status == 200
         assert live_ops["missing"] is False
-        assert live_ops["data"]["sites"][0]["ssh"]["user"] == "ubuntu"
+        assert live_ops["data"]["sites"][0]["ssh"]["user"] == "deploy"
 
         status, readiness = request(port, "GET", "/projects/repo/readiness")
         assert status == 200
@@ -268,7 +268,7 @@ def test_server_upserts_document_into_served_pack(tmp_path: Path) -> None:
         assert status == 200
         records = [json.loads(line) for line in trash["content"].splitlines() if line]
         assert records[-1]["source_path"] == ".spectrum-project/ops.json"
-        assert json.loads(records[-1]["content"])["sites"][0]["name"] == "bytespectrum"
+        assert json.loads(records[-1]["content"])["sites"][0]["name"] == "example-site"
     finally:
         server.shutdown()
         server.server_close()
