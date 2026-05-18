@@ -44,11 +44,11 @@ def verify_spec(spec_path: str | Path) -> ValidationReport:
     return _report([(str(spec), result)])
 
 
-def verify_pack(pack_path: str | Path) -> ValidationReport:
+def verify_pack(pack_path: str | Path, *, passphrase: str | None = None) -> ValidationReport:
     results: list[tuple[str, DecodeResult]] = []
     with tempfile.TemporaryDirectory(prefix="spectrum-core-verify-pack-") as tmp_name:
         tmp = Path(tmp_name)
-        with SpectrumPack.open(pack_path) as opened:
+        with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
             for entry in opened.entries:
                 spec_path = opened.extract_spec(entry, tmp / "pack")
                 result = decode_file(spec_path, tmp / "decoded" / entry.source)
@@ -56,10 +56,10 @@ def verify_pack(pack_path: str | Path) -> ValidationReport:
     return _report(results)
 
 
-def verify_path(path: str | Path) -> ValidationReport:
+def verify_path(path: str | Path, *, passphrase: str | None = None) -> ValidationReport:
     target = Path(path)
     if target.suffix.lower() == ".specpack":
-        return verify_pack(target)
+        return verify_pack(target, passphrase=passphrase)
     if target.is_dir():
         results: list[tuple[str, DecodeResult]] = []
         with tempfile.TemporaryDirectory(prefix="spectrum-core-verify-dir-") as tmp_name:

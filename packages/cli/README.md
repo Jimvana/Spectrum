@@ -73,21 +73,38 @@ npm run build:hub-gui
 The build output is `dist/SpectrumHub/SpectrumHub.exe`. Installing
 `tkinterdnd2` before the build enables native drag and drop in the packaged app.
 
-Build the Windows installer with Inno Setup 6:
+Build the platform installer:
 
 ```powershell
-winget install JRSoftware.InnoSetup
 npm run build:hub-gui-installer
 ```
 
-The installer wraps the complete PyInstaller folder, so end users do not need
-Python, PyInstaller, `tkinterdnd2`, or the Spectrum source checkout installed.
-It installs `SpectrumHub.exe`, bundled Python/runtime files, packaged Spectrum
-modules, the drag/drop support files, and the Spectrum codec runtime.
+On Windows, install Inno Setup 6 first:
+
+```powershell
+winget install JRSoftware.InnoSetup
+```
+
+The Windows installer wraps the complete PyInstaller folder, so end users do not
+need Python, PyInstaller, `tkinterdnd2`, or the Spectrum source checkout
+installed. It installs `SpectrumHub.exe`, bundled Python/runtime files, packaged
+Spectrum modules, the drag/drop support files, and the Spectrum codec runtime.
 Close any running Spectrum Hub window before rebuilding; Windows keeps bundled
 DLLs locked while the app is open.
 The packaged app requests administrator rights on launch, so Windows will show
 a UAC prompt before opening Spectrum Hub.
+
+On macOS, the installer output is
+`dist/installer/SpectrumHub-<version>-macos.pkg`. It installs
+`Spectrum Hub.app` into `/Applications` and tries to run `npm install -g
+spectrumstore@latest` as a postinstall step so the public `spectrum` and
+`spectrumstore` CLI commands are updated too. Use `SPECTRUM_HUB_CLI_PACKAGE` to
+change the installed CLI tag or version, for example
+`SPECTRUM_HUB_CLI_PACKAGE=spectrumstore@preview npm run
+build:hub-gui-installer:macos`. If Node.js/npm is not available to macOS
+Installer, the app install still succeeds and the manual CLI install command is
+written to `/var/log/spectrum-hub-install.log`. Add `--require-cli-install` when
+you want npm failure to fail the whole package install.
 
 If an appended source path already exists, `append` fails unless `--replace` is
 passed. Appending removes embedded `index.bin` so searches do not silently use a

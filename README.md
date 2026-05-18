@@ -202,16 +202,34 @@ npm run build:hub-gui:macos
 npm run build:hub-gui:linux
 ```
 
-PyInstaller builds must run on the target operating system. Windows additionally
-has an Inno Setup installer target:
+PyInstaller builds must run on the target operating system. Windows and macOS
+also have installer targets:
 
 ```powershell
 npm run build:hub-gui-installer
 ```
 
-The macOS target currently produces `dist/SpectrumHub.app`. The Linux target
-produces a portable `dist/SpectrumHub/` folder. DMG, signing/notarization,
-AppImage, and `.deb` packaging are intentionally separate release steps.
+On Windows this wraps the PyInstaller folder with Inno Setup. On macOS it builds
+`dist/installer/SpectrumHub-<version>-macos.pkg`, installs `Spectrum Hub.app`
+into `/Applications`, and runs a postinstall step that tries to install the
+latest published CLI with:
+
+```bash
+npm install -g spectrumstore@latest
+```
+
+The CLI package can be changed for preview or pinned releases:
+
+```bash
+SPECTRUM_HUB_CLI_PACKAGE=spectrumstore@preview npm run build:hub-gui-installer:macos
+```
+
+If Node.js/npm is not available to macOS Installer, the app install still
+succeeds and the manual CLI install command is written to
+`/var/log/spectrum-hub-install.log`. Use `--require-cli-install` when you
+explicitly want the package to fail if the CLI cannot be installed. The Linux
+target produces a portable `dist/SpectrumHub/` folder. AppImage and `.deb`
+packaging are separate release steps.
 
 The package name is `spectrumstore`, and it exposes both `spectrum` and
 `spectrumstore` commands. It requires Node.js 18+ and Python 3.10+ on `PATH`;
@@ -570,4 +588,3 @@ Recent local code-search signal:
 All timings are milliseconds. These runs used small generated-query code
 benchmarks, so treat them as a profile tuning signal rather than a large-scale
 production claim.
-

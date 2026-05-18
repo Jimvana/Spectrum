@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import queue
 import os
+import platform
 import sys
 import threading
 import webbrowser
@@ -20,16 +21,17 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             os.environ.setdefault("SPECTRUM_REPO_ROOT", str(bundled_runtime))
             break
 
-from spectrum_core import append_to_pack, inspect_pack, verify_pack
+from spectrum_core import append_to_pack, inspect_pack, is_encrypted_pack, verify_pack
 from spectrum_index import build_index
 from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
 
-from spectrum_cli.main import _default_project_pack_path, command_project_init
+from spectrum_cli.main import command_project_init
 
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 7777
 ASSET_DIR = Path("spectrum_cli") / "assets"
+DOCUMENTS_PACK_DIR_NAME = "Spectrum"
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,9 @@ class PackDetails:
     size_label: str
     entries: int
     source_root: str
+    encrypted: bool
+    locked: bool
+    hint: str
 
 
 def format_bytes(size: int) -> str:
@@ -54,11 +59,11 @@ def format_bytes(size: int) -> str:
     return f"{size} B"
 
 
-def load_pack_details(pack_path: str | Path) -> PackDetails:
+def load_pack_details(pack_path: str | Path, *, passphrase: str | None = None) -> PackDetails:
     path = Path(pack_path).expanduser().resolve()
     if path.suffix.lower() != ".specpack":
         raise ValueError("Select a .specpack file.")
-    summary = inspect_pack(path)
+    summary = inspect_pack(path, passphrase=passphrase)
     return PackDetails(
         path=path,
         name=path.stem,
@@ -66,6 +71,9 @@ def load_pack_details(pack_path: str | Path) -> PackDetails:
         size_label=format_bytes(path.stat().st_size),
         entries=int(summary.get("entries", 0)),
         source_root=str(summary.get("source_root") or ""),
+        encrypted=bool(summary.get("encrypted", False)),
+        locked=bool(summary.get("locked", False)),
+        hint=str(summary.get("hint") or ""),
     )
 
 
@@ -84,12 +92,26 @@ def asset_path(name: str) -> Path:
     return Path(__file__).resolve().parent / "assets" / name
 
 
+def default_pack_directory() -> Path:
+    if platform.system() == "Darwin":
+        return Path.home() / "Documents" / DOCUMENTS_PACK_DIR_NAME
+    return Path.home() / "Documents" / DOCUMENTS_PACK_DIR_NAME
+
+
+def default_pack_output_path(source_path: Path) -> Path:
+    name = source_path.resolve().name if source_path.exists() else source_path.name
+    if not name or name in {".", ".."}:
+        name = "project"
+    return default_pack_directory() / f"{name}.specpack"
+
+
 class SpectrumHubGui:
     def __init__(self, root: tk.Tk, *, drag_drop_available: bool) -> None:
         self.root = root
         self.drag_drop_available = drag_drop_available
         self.pack_path: Path | None = None
         self.pending_paths: list[Path] = []
+        self.pack_passphrases: dict[Path, str] = {}
         self.server: SpectrumServer | None = None
         self.server_thread: threading.Thread | None = None
         self.status_queue: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -100,6 +122,7 @@ class SpectrumHubGui:
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
         self.server_var = tk.StringVar(value="Server stopped")
         self.replace_var = tk.BooleanVar(value=False)
+        self.encrypt_var = tk.BooleanVar(value=False)
         self.append_status_var = tk.StringVar(value="Drop documents here, then confirm append.")
 
         self._build()
@@ -135,8 +158,9 @@ class SpectrumHubGui:
         pack_actions.columnconfigure(4, weight=1)
         ttk.Button(pack_actions, text="Open Specpack", command=self.open_specpack).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(pack_actions, text="Create Specpack", command=self.create_specpack).grid(row=0, column=1, padx=(0, 8))
-        ttk.Label(pack_actions, text="Port").grid(row=0, column=2, padx=(8, 6))
-        ttk.Entry(pack_actions, textvariable=self.port_var, width=8).grid(row=0, column=3, padx=(0, 8))
+        ttk.Checkbutton(pack_actions, text="Encrypt new pack", variable=self.encrypt_var).grid(row=0, column=2, padx=(8, 8))
+        ttk.Label(pack_actions, text="Port").grid(row=0, column=3, padx=(8, 6))
+        ttk.Entry(pack_actions, textvariable=self.port_var, width=8).grid(row=0, column=4, padx=(0, 8))
 
         server_actions = ttk.Frame(main)
         server_actions.grid(row=2, column=0, sticky="ew", pady=(0, 14))
@@ -237,9 +261,56 @@ class SpectrumHubGui:
             return None
         return port
 
+    def _passphrase_for_pack(self, pack: Path, *, prompt: bool = True) -> str | None:
+        resolved = pack.expanduser().resolve()
+        if not is_encrypted_pack(resolved):
+            return None
+        cached = self.pack_passphrases.get(resolved)
+        if cached is not None:
+            return cached
+        if not prompt:
+            return None
+        hint = ""
+        try:
+            hint = str(inspect_pack(resolved).get("hint") or "")
+        except Exception:
+            pass
+        message = "Unlock passphrase"
+        if hint:
+            message = f"Unlock passphrase\nHint: {hint}"
+        value = simpledialog.askstring("Unlock encrypted specpack", message, show="*")
+        if not value:
+            return None
+        try:
+            inspect_pack(resolved, passphrase=value)
+        except Exception as exc:
+            messagebox.showerror("Spectrum Hub", f"Could not unlock specpack: {exc}")
+            return None
+        self.pack_passphrases[resolved] = value
+        return value
+
+    def _new_pack_encryption(self) -> tuple[bool, str | None, str | None] | None:
+        if not self.encrypt_var.get():
+            return False, None, None
+        messagebox.showinfo(
+            "Encrypt specpack",
+            "Use a long memorable passphrase. Spectrum cannot recover it if it is forgotten.",
+        )
+        passphrase = simpledialog.askstring("Encrypt specpack", "Create passphrase", show="*")
+        if not passphrase:
+            return None
+        confirm = simpledialog.askstring("Encrypt specpack", "Confirm passphrase", show="*")
+        if passphrase != confirm:
+            messagebox.showerror("Spectrum Hub", "Passphrases do not match.")
+            return None
+        hint = simpledialog.askstring("Passphrase hint", "Optional non-secret hint", initialvalue="") or None
+        return True, passphrase, hint
+
     def open_specpack(self) -> None:
+        initialdir = default_pack_directory()
         filename = filedialog.askopenfilename(
             title="Open Spectrum specpack",
+            initialdir=str(initialdir) if initialdir.exists() else str(Path.home() / "Documents"),
             filetypes=[("Spectrum specpack", "*.specpack"), ("All files", "*.*")],
         )
         if filename:
@@ -250,7 +321,8 @@ class SpectrumHubGui:
         if not source:
             return
         source_path = Path(source)
-        default_output = _default_project_pack_path(source_path)
+        default_output = default_pack_output_path(source_path)
+        default_output.parent.mkdir(parents=True, exist_ok=True)
         output = filedialog.asksaveasfilename(
             title="Save Spectrum specpack",
             initialdir=str(default_output.parent),
@@ -266,44 +338,75 @@ class SpectrumHubGui:
         port = self._port()
         if port is None:
             return
+        encryption = self._new_pack_encryption()
+        if encryption is None:
+            return
+        encrypt, passphrase, hint = encryption
 
         self.append_status_var.set("Creating specpack...")
-        self.root.update_idletasks()
+        threading.Thread(
+            target=self._create_specpack_worker,
+            args=(source_path, Path(output), name, port, encrypt, passphrase, hint),
+            daemon=True,
+        ).start()
+
+    def _create_specpack_worker(
+        self,
+        source_path: Path,
+        output: Path,
+        name: str,
+        port: int,
+        encrypt: bool,
+        passphrase: str | None,
+        hint: str | None,
+    ) -> None:
         try:
             code = command_project_init(
                 argparse.Namespace(
                     source=str(source_path),
-                    output=output,
+                    output=str(output),
                     name=name,
                     replace_template=False,
                     no_index=False,
                     port=port,
-                    all=True,
+                    all=False,
                     language=None,
                     rle="off",
                     zlib_level=9,
                     verbose=False,
                     json=True,
+                    encrypt=encrypt,
+                    passphrase=passphrase,
+                    kdf_profile="interactive",
+                    hint=hint,
                 )
             )
             if code:
                 raise RuntimeError("Specpack creation failed.")
-            self.set_pack(output)
-            self.append_status_var.set("Specpack created.")
+            if encrypt and passphrase:
+                self.pack_passphrases[output.expanduser().resolve()] = passphrase
+            self.root.after(0, self._after_create_success, output)
         except Exception as exc:
-            messagebox.showerror("Spectrum Hub", str(exc))
-            self.append_status_var.set("Specpack creation failed.")
+            self.status_queue.put(("append", f"Specpack creation failed: {exc}"))
+            self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
+
+    def _after_create_success(self, output: Path) -> None:
+        self.set_pack(output)
+        self.append_status_var.set("Specpack created.")
 
     def set_pack(self, pack_path: str | Path) -> None:
         try:
-            details = load_pack_details(pack_path)
+            path = Path(pack_path).expanduser().resolve()
+            details = load_pack_details(path, passphrase=self.pack_passphrases.get(path))
         except Exception as exc:
             messagebox.showerror("Spectrum Hub", str(exc))
             return
         self.pack_path = details.path
         self.pack_name_var.set(details.name)
         root = f" | source root: {details.source_root}" if details.source_root else ""
-        self.pack_detail_var.set(f"{details.path} | {details.size_label} | {details.entries} documents{root}")
+        lock = " | encrypted unlocked" if details.encrypted and not details.locked else " | encrypted locked" if details.encrypted else ""
+        docs = f"{details.entries} documents" if not details.locked else "locked"
+        self.pack_detail_var.set(f"{details.path} | {details.size_label} | {docs}{root}{lock}")
 
     def add_files(self) -> None:
         filenames = filedialog.askopenfilenames(title="Select documents to append")
@@ -348,21 +451,24 @@ class SpectrumHubGui:
             return
         paths = list(self.pending_paths)
         replace = self.replace_var.get()
-        threading.Thread(target=self._append_worker, args=(pack, paths, replace), daemon=True).start()
+        passphrase = self._passphrase_for_pack(pack)
+        if is_encrypted_pack(pack) and passphrase is None:
+            return
+        threading.Thread(target=self._append_worker, args=(pack, paths, replace, passphrase), daemon=True).start()
 
-    def _append_worker(self, pack: Path, paths: list[Path], replace: bool) -> None:
+    def _append_worker(self, pack: Path, paths: list[Path], replace: bool, passphrase: str | None) -> None:
         try:
             self.status_queue.put(("append", "Appending documents..."))
             appended = 0
             replaced = 0
             for path in paths:
-                summary = append_to_pack(pack, path, include_all=True, replace=replace)
+                summary = append_to_pack(pack, path, include_all=False, replace=replace, passphrase=passphrase)
                 appended += int(summary.get("appended_entries", 0))
                 replaced += int(summary.get("replaced_entries", 0))
-            verify = verify_pack(pack).to_dict()
+            verify = verify_pack(pack, passphrase=passphrase).to_dict()
             if not verify.get("valid"):
                 raise RuntimeError("Pack append completed, but verification failed.")
-            index = build_index(pack, embed=True)
+            index = build_index(pack, embed=True, passphrase=passphrase)
             self.root.after(0, self._after_append_success, appended, replaced, int(index.get("documents", 0)))
         except Exception as exc:
             self.status_queue.put(("append", f"Append failed: {exc}"))
@@ -388,8 +494,11 @@ class SpectrumHubGui:
             self.server_var.set(f"Server already running at http://{HOST}:{port}/project")
             return
         try:
+            passphrase = self._passphrase_for_pack(pack)
+            if is_encrypted_pack(pack) and passphrase is None:
+                return
             registry = PackRegistry()
-            registry.add("repo", pack)
+            registry.add("repo", pack, passphrase=passphrase)
             server = SpectrumServer((HOST, port), create_handler(registry), quiet=True)
         except Exception as exc:
             messagebox.showerror("Spectrum Hub", str(exc))

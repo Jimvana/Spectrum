@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import plistlib
 import platform
 import shutil
 import subprocess
@@ -19,6 +21,7 @@ PYTHONPATH_ENTRIES = [
 ASSETS = ROOT / "packages/cli/src/spectrum_cli/assets"
 RUNTIME = ROOT / "CLI Tool/vendor/spectrum_algo"
 ENTRYPOINT = ROOT / "packages/cli/src/spectrum_cli/gui.py"
+DEFAULT_BUNDLE_IDENTIFIER = "co.uk.agegatepro.spectrumhub"
 
 
 def host_platform() -> str:
@@ -65,6 +68,42 @@ def module_available(module: str, env: dict[str, str]) -> bool:
     ).returncode == 0
 
 
+def package_version() -> str:
+    package_json = ROOT / "package.json"
+    try:
+        metadata = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "0.0.0"
+    version = str(metadata.get("version") or "0.0.0")
+    return version.removeprefix("v")
+
+
+def macos_icon(work: Path) -> Path | None:
+    source = ASSETS / "spec-icon.png"
+    if not source.exists():
+        return None
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+
+    destination = work / "SpectrumHub.icns"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.open(source).convert("RGBA")
+    sizes = [16, 32, 64, 128, 256, 512, 1024]
+    rendered = []
+    for size in sizes:
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        image.thumbnail((size, size), Image.LANCZOS)
+        left = (size - image.width) // 2
+        top = (size - image.height) // 2
+        canvas.alpha_composite(image, (left, top))
+        rendered.append(canvas)
+        image = Image.open(source).convert("RGBA")
+    rendered[-1].save(destination, format="ICNS", append_images=rendered[:-1])
+    return destination
+
+
 def spectrum_hub_running() -> bool:
     if host_platform() != "windows":
         return False
@@ -96,7 +135,7 @@ def build_command(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
         str(args.specpath),
     ]
 
-    if args.platform in {"windows", "macos"}:
+    if args.platform in {"windows", "macos", "linux"}:
         command.append("--windowed")
 
     if args.platform == "windows":
@@ -106,9 +145,14 @@ def build_command(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
         if args.uac_admin:
             command.append("--uac-admin")
     elif args.platform == "macos":
-        # PyInstaller expects .icns for a polished app icon. Build the .app
-        # first; add .icns generation when release signing/notarization lands.
-        pass
+        command.extend(["--osx-bundle-identifier", args.bundle_identifier])
+        icon = macos_icon(args.work)
+        if icon is not None:
+            command.extend(["--icon", str(icon)])
+    elif args.platform == "linux":
+        icon = ASSETS / "spec-icon.png"
+        if icon.exists():
+            command.extend(["--icon", str(icon)])
 
     for path in PYTHONPATH_ENTRIES:
         command.extend(["--paths", str(path)])
@@ -127,6 +171,8 @@ def build_command(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
             "spectrum_index.api",
             "--hidden-import",
             "spectrum_core.pack",
+            "--collect-submodules",
+            "cryptography",
         ]
     )
 
@@ -145,6 +191,35 @@ def expected_output(dist: Path, target_platform: str) -> Path:
     return dist / "SpectrumHub" / "SpectrumHub"
 
 
+def update_macos_plist(app: Path, args: argparse.Namespace) -> None:
+    plist_path = app / "Contents" / "Info.plist"
+    if not plist_path.exists():
+        return
+    with plist_path.open("rb") as file:
+        plist = plistlib.load(file)
+    plist["CFBundleDisplayName"] = "Spectrum Hub"
+    plist["CFBundleName"] = "Spectrum Hub"
+    plist["CFBundleIdentifier"] = args.bundle_identifier
+    plist["CFBundleShortVersionString"] = args.app_version
+    plist["CFBundleVersion"] = args.app_version
+    with plist_path.open("wb") as file:
+        plistlib.dump(plist, file, sort_keys=False)
+
+
+def resign_macos_app(app: Path) -> None:
+    xattr = shutil.which("xattr")
+    if xattr is not None:
+        subprocess.run([xattr, "-cr", str(app)], check=True)
+
+    codesign = shutil.which("codesign")
+    if codesign is None:
+        return
+    subprocess.run(
+        [codesign, "--force", "--deep", "--sign", "-", str(app)],
+        check=True,
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the Spectrum Hub desktop GUI with PyInstaller.")
     parser.add_argument(
@@ -156,6 +231,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dist", type=Path, default=Path(os.environ.get("SPECTRUM_HUB_DIST_ROOT", ROOT / "dist")))
     parser.add_argument("--work", type=Path, default=ROOT / "build/spectrum-hub-gui")
     parser.add_argument("--specpath", type=Path, default=ROOT / "build/spectrum-hub-gui")
+    parser.add_argument(
+        "--app-version",
+        default=os.environ.get("SPECTRUM_HUB_APP_VERSION", package_version()),
+        help="macOS only: CFBundleShortVersionString/CFBundleVersion value.",
+    )
+    parser.add_argument(
+        "--bundle-identifier",
+        default=os.environ.get("SPECTRUM_HUB_BUNDLE_IDENTIFIER", DEFAULT_BUNDLE_IDENTIFIER),
+        help="macOS only: reverse-DNS bundle identifier.",
+    )
     parser.add_argument(
         "--uac-admin",
         action=argparse.BooleanOptionalAction,
@@ -203,6 +288,11 @@ def main(argv: list[str] | None = None) -> int:
     result = subprocess.run(command, cwd=ROOT, env=env)
     if result.returncode:
         return result.returncode
+
+    if args.platform == "macos":
+        app = expected_output(args.dist, args.platform)
+        update_macos_plist(app, args)
+        resign_macos_app(app)
 
     print(f"Built: {expected_output(args.dist, args.platform)}")
     return 0

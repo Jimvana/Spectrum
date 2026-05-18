@@ -10,7 +10,9 @@
     "build:hub-gui:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-hub-gui-exe.ps1",
     "build:hub-gui:macos": "python scripts/build-hub-gui.py --platform macos",
     "build:hub-gui:linux": "python scripts/build-hub-gui.py --platform linux",
-    "build:hub-gui-installer": "powershell -ExecutionPolicy Bypass -File scripts/build-hub-gui-installer.ps1"
+    "build:hub-gui-installer": "python scripts/build-hub-gui-installer.py",
+    "build:hub-gui-installer:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-hub-gui-installer.ps1",
+    "build:hub-gui-installer:macos": "python scripts/build-hub-gui-installer.py --platform macos"
   },
   "bin": {
     "spectrum": "bin/spectrumstore.js",
@@ -27,6 +29,7 @@
     "packages/server/src/**/*.py",
     "installer/SpectrumHub.iss",
     "scripts/build-hub-gui.py",
+    "scripts/build-hub-gui-installer.py",
     "scripts/install-hub-gui-build-deps.ps1",
     "scripts/build-hub-gui-exe.ps1",
     "scripts/build-hub-gui-installer.ps1",

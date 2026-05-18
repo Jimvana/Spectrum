@@ -1,11 +1,19 @@
 """Public Spectrum Core API."""
 
 from .pack import (
+    EncryptOptions,
+    EncryptedPackInfo,
+    InvalidPassphraseError,
+    LockedPackError,
     PackEntry,
     SpectrumPack,
     append_to_pack,
     decode_member,
+    decrypt_pack_bytes,
+    encrypt_pack_bytes,
+    inspect_encrypted_header,
     inspect_pack,
+    is_encrypted_pack,
     pack,
     unpack,
 )
@@ -26,7 +34,11 @@ from .validation import (
 
 __all__ = [
     "DecodeResult",
+    "EncryptOptions",
+    "EncryptedPackInfo",
     "EncodeResult",
+    "InvalidPassphraseError",
+    "LockedPackError",
     "PackEntry",
     "SpecInfo",
     "SpectrumPack",
@@ -34,9 +46,13 @@ __all__ = [
     "append_to_pack",
     "decode_file",
     "decode_member",
+    "decrypt_pack_bytes",
     "encode_file",
+    "encrypt_pack_bytes",
+    "inspect_encrypted_header",
     "inspect_pack",
     "inspect_spec",
+    "is_encrypted_pack",
     "pack",
     "unpack",
     "verify_pack",

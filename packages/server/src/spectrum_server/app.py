@@ -13,7 +13,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
-from spectrum_core import SpectrumPack, append_to_pack, decode_member, encode_file, inspect_pack, unpack, verify_pack
+from spectrum_core import (
+    EncryptOptions,
+    LockedPackError,
+    SpectrumPack,
+    append_to_pack,
+    decode_member,
+    encode_file,
+    encrypt_pack_bytes,
+    inspect_pack,
+    inspect_encrypted_header,
+    is_encrypted_pack,
+    unpack,
+    verify_pack,
+)
 from spectrum_index import build_pack_index, search_pack
 
 SERVER_VERSION = "0.1.0"
@@ -73,9 +86,10 @@ class PackRegistry:
 
     def __init__(self) -> None:
         self._packs: dict[str, Path] = {}
+        self._passphrases: dict[str, str] = {}
         self.lock = threading.RLock()
 
-    def add(self, pack_id: str, path: str | Path) -> dict:
+    def add(self, pack_id: str, path: str | Path, *, passphrase: str | None = None) -> dict:
         if not pack_id:
             raise ApiError(HTTPStatus.BAD_REQUEST, "pack id is required")
         pack_path = Path(path).expanduser().resolve()
@@ -83,10 +97,13 @@ class PackRegistry:
             raise ApiError(HTTPStatus.NOT_FOUND, f"pack not found: {pack_path}")
         if pack_path.suffix.lower() != ".specpack":
             raise ApiError(HTTPStatus.BAD_REQUEST, "pack path must end with .specpack")
-        with SpectrumPack.open(pack_path):
+        with SpectrumPack.open(pack_path, passphrase=passphrase):
             pass
         self._packs[pack_id] = pack_path
-        return {"id": pack_id, "path": str(pack_path)}
+        if passphrase is not None:
+            self._passphrases[pack_id] = passphrase
+        info = inspect_pack(pack_path, passphrase=passphrase)
+        return {"id": pack_id, "path": str(pack_path), "encrypted": info.get("encrypted", False), "locked": False}
 
     def get(self, pack_id: str) -> Path:
         try:
@@ -94,24 +111,38 @@ class PackRegistry:
         except KeyError as exc:
             raise ApiError(HTTPStatus.NOT_FOUND, f"unknown pack: {pack_id}") from exc
 
+    def passphrase(self, pack_id: str) -> str | None:
+        self.get(pack_id)
+        return self._passphrases.get(pack_id)
+
     def remove(self, pack_id: str) -> dict:
         path = self.get(pack_id)
         del self._packs[pack_id]
         return {"id": pack_id, "path": str(path), "removed": True}
 
     def list(self) -> list[dict]:
-        return [{"id": pack_id, "path": str(path)} for pack_id, path in sorted(self._packs.items())]
+        rows = []
+        for pack_id, path in sorted(self._packs.items()):
+            encrypted = is_encrypted_pack(path)
+            rows.append({
+                "id": pack_id,
+                "path": str(path),
+                "encrypted": encrypted,
+                "locked": encrypted and pack_id not in self._passphrases,
+                "hint": inspect_pack(path).get("hint") if encrypted else None,
+            })
+        return rows
 
 
-def _decode_document(pack_path: Path, source_path: str) -> dict:
+def _decode_document(pack_path: Path, source_path: str, *, passphrase: str | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="spectrum-server-doc-") as tmp_name:
         tmp = Path(tmp_name)
         output = tmp / "document"
-        with SpectrumPack.open(pack_path) as opened:
+        with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
             entry = opened.find_entry(source_path)
             if entry is None:
                 raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {source_path}")
-        result = decode_member(pack_path, source_path, output)
+        result = decode_member(pack_path, source_path, output, passphrase=passphrase)
         data = output.read_bytes()
         return {
             "path": entry.source,
@@ -133,7 +164,7 @@ def _safe_source_path(value: str) -> str:
     return path.as_posix()
 
 
-def _upsert_pack_document(pack_path: Path, source_path: str, body: dict) -> dict:
+def _upsert_pack_document(pack_path: Path, source_path: str, body: dict, *, passphrase: str | None = None) -> dict:
     source = _safe_source_path(source_path)
     if "content_bytes" in body:
         raw_bytes = bytes(int(value) for value in body["content_bytes"])
@@ -149,14 +180,14 @@ def _upsert_pack_document(pack_path: Path, source_path: str, body: dict) -> dict
         target = tmp / source
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw_bytes)
-        append_summary = append_to_pack(pack_path, tmp, replace=replace, include_all=True)
+        append_summary = append_to_pack(pack_path, tmp, replace=replace, include_all=True, passphrase=passphrase)
 
-    verify_report = verify_pack(pack_path).to_dict()
+    verify_report = verify_pack(pack_path, passphrase=passphrase).to_dict()
     index_summary = None
     if rebuild_index:
-        result = build_pack_index(pack_path, embed=True)
+        result = build_pack_index(pack_path, embed=True, passphrase=passphrase)
         index_summary = {key: value for key, value in result.items() if key != "index"}
-    document = _decode_document(pack_path, source)
+    document = _decode_document(pack_path, source, passphrase=passphrase)
     return {
         "path": str(pack_path),
         "source_path": source,
@@ -171,12 +202,12 @@ def _upsert_pack_document(pack_path: Path, source_path: str, body: dict) -> dict
     }
 
 
-def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None = None) -> dict:
+def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None = None, *, passphrase: str | None = None) -> dict:
     source = _safe_source_path(source_path)
     body = body or {}
     rebuild_index = bool(body.get("rebuild_index", True))
     reason = str(body.get("reason") or "")
-    with SpectrumPack.open(pack_path) as opened:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
         entry = opened.find_entry(source)
         if entry is None:
             raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {source}")
@@ -191,13 +222,13 @@ def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None =
     with tempfile.TemporaryDirectory(prefix="spectrum-server-delete-") as tmp_name:
         tmp = Path(tmp_name)
         removed_output = tmp / "removed"
-        result = decode_member(pack_path, source, removed_output)
+        result = decode_member(pack_path, source, removed_output, passphrase=passphrase)
         removed_content = removed_output.read_text(encoding="utf-8", errors="replace")
         trash_existing = ""
-        with SpectrumPack.open(pack_path) as opened:
+        with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
             if opened.find_entry(TRASH_SOURCE_PATH) is not None:
                 trash_output = tmp / "existing-trash.jsonl"
-                decode_member(pack_path, TRASH_SOURCE_PATH, trash_output)
+                decode_member(pack_path, TRASH_SOURCE_PATH, trash_output, passphrase=passphrase)
                 trash_existing = trash_output.read_text(encoding="utf-8", errors="replace")
 
         trash_record = {
@@ -225,21 +256,37 @@ def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None =
         manifest["entries"] = entries
 
         tmp_zip = Path(tmp_name) / pack_path.name
-        with zipfile.ZipFile(pack_path) as source_zip, zipfile.ZipFile(
+        with SpectrumPack.open(pack_path, passphrase=passphrase) as opened, zipfile.ZipFile(
             tmp_zip, "w", compression=zipfile.ZIP_STORED
         ) as target_zip:
+            source_zip = opened._zip
             for item in source_zip.infolist():
                 if item.filename in {"manifest.json", removed_spec, "index.bin", trash_entry["spec"]}:
                     continue
                 target_zip.writestr(item, source_zip.read(item.filename))
             target_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
             target_zip.write(trash_spec, trash_entry["spec"])
-        shutil.move(str(tmp_zip), pack_path)
+        if is_encrypted_pack(pack_path):
+            if passphrase is None:
+                raise ApiError(HTTPStatus.LOCKED, "encrypted Spectrum pack is locked")
+            encrypted_info = inspect_encrypted_header(pack_path)
+            pack_path.write_bytes(
+                encrypt_pack_bytes(
+                    tmp_zip.read_bytes(),
+                    passphrase,
+                    options=EncryptOptions(
+                        encrypted_info.kdf_profile or "interactive",
+                        encrypted_info.hint,
+                    ),
+                )
+            )
+        else:
+            shutil.move(str(tmp_zip), pack_path)
 
-    verify_report = verify_pack(pack_path).to_dict()
+    verify_report = verify_pack(pack_path, passphrase=passphrase).to_dict()
     index_summary = None
     if rebuild_index:
-        result = build_pack_index(pack_path, embed=True)
+        result = build_pack_index(pack_path, embed=True, passphrase=passphrase)
         index_summary = {key: value for key, value in result.items() if key != "index"}
     return {
         "path": str(pack_path),
@@ -267,8 +314,8 @@ def _document_summary(pack_id: str, entry) -> dict:
     }
 
 
-def _pack_manifest(pack_path: Path, pack_id: str) -> dict:
-    with SpectrumPack.open(pack_path) as opened:
+def _pack_manifest(pack_path: Path, pack_id: str, *, passphrase: str | None = None) -> dict:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
         documents = [_document_summary(pack_id, entry) for entry in opened.entries]
         return {
             "id": pack_id,
@@ -281,9 +328,9 @@ def _pack_manifest(pack_path: Path, pack_id: str) -> dict:
         }
 
 
-def _decode_project_ops(pack_path: Path) -> dict:
+def _decode_project_ops(pack_path: Path, *, passphrase: str | None = None) -> dict:
     candidates = [f"{PROJECT_CONTEXT_DIR}/ops.json", "ops.json"]
-    with SpectrumPack.open(pack_path) as opened:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
         source_path = next((candidate for candidate in candidates if opened.find_entry(candidate)), None)
     if source_path is None:
         return {
@@ -293,7 +340,7 @@ def _decode_project_ops(pack_path: Path) -> dict:
             "error": None,
         }
 
-    decoded = _decode_document(pack_path, source_path)
+    decoded = _decode_document(pack_path, source_path, passphrase=passphrase)
     try:
         data = json.loads(decoded["content"])
     except json.JSONDecodeError as exc:
@@ -351,12 +398,12 @@ def _ops_readiness(ops: dict) -> dict:
     }
 
 
-def _build_project_context(pack_path: Path, pack_id: str) -> dict:
+def _build_project_context(pack_path: Path, pack_id: str, *, passphrase: str | None = None) -> dict:
     documents = []
     missing = []
     fields: dict[str, str] = {}
 
-    with SpectrumPack.open(pack_path) as opened:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
         available = {entry.source for entry in opened.entries}
 
     for filename in PROJECT_CONTEXT_FILES:
@@ -365,7 +412,7 @@ def _build_project_context(pack_path: Path, pack_id: str) -> dict:
         if source_path is None:
             missing.append(filename)
             continue
-        decoded = _decode_document(pack_path, source_path)
+        decoded = _decode_document(pack_path, source_path, passphrase=passphrase)
         document = {
             "path": decoded["path"],
             "id": decoded["id"],
@@ -377,7 +424,7 @@ def _build_project_context(pack_path: Path, pack_id: str) -> dict:
         documents.append(document)
         fields[PROJECT_FIELD_NAMES[filename]] = decoded["content"]
 
-    ops = _decode_project_ops(pack_path)
+    ops = _decode_project_ops(pack_path, passphrase=passphrase)
     return {
         "id": pack_id,
         "pack_path": str(pack_path),
@@ -918,6 +965,8 @@ def create_handler(registry: PackRegistry | None = None):
                     self._send_json(payload)
             except ApiError as exc:
                 self._send_json({"error": exc.message}, status=exc.status)
+            except LockedPackError as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.LOCKED)
             except json.JSONDecodeError:
                 self._send_json({"error": "invalid JSON body"}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # pragma: no cover - defensive HTTP boundary.
@@ -939,15 +988,15 @@ def create_handler(registry: PackRegistry | None = None):
 
             if len(parts) == 3 and parts[0] in {"projects", "packs"} and parts[2] == "context" and method == "GET":
                 pack_id = parts[1]
-                return _build_project_context(registry.get(pack_id), pack_id)
+                return _build_project_context(registry.get(pack_id), pack_id, passphrase=registry.passphrase(pack_id))
 
             if len(parts) == 3 and parts[0] in {"projects", "packs"} and parts[2] == "ops" and method == "GET":
                 pack_id = parts[1]
-                return _decode_project_ops(registry.get(pack_id))
+                return _decode_project_ops(registry.get(pack_id), passphrase=registry.passphrase(pack_id))
 
             if len(parts) == 3 and parts[0] in {"projects", "packs"} and parts[2] == "readiness" and method == "GET":
                 pack_id = parts[1]
-                return _ops_readiness(_decode_project_ops(registry.get(pack_id)))
+                return _ops_readiness(_decode_project_ops(registry.get(pack_id), passphrase=registry.passphrase(pack_id)))
 
             if parts == ["packs"]:
                 if method == "GET":
@@ -963,25 +1012,25 @@ def create_handler(registry: PackRegistry | None = None):
             if len(parts) == 2 and parts[0] == "packs":
                 pack_id = parts[1]
                 if method == "GET":
-                    return {"id": pack_id, **inspect_pack(registry.get(pack_id))}
+                    return {"id": pack_id, **inspect_pack(registry.get(pack_id), passphrase=registry.passphrase(pack_id))}
                 if method == "DELETE":
                     return registry.remove(pack_id)
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "manifest" and method == "GET":
-                return _pack_manifest(registry.get(parts[1]), parts[1])
+                return _pack_manifest(registry.get(parts[1]), parts[1], passphrase=registry.passphrase(parts[1]))
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
-                return {"documents": _pack_manifest(registry.get(parts[1]), parts[1])["documents"]}
+                return {"documents": _pack_manifest(registry.get(parts[1]), parts[1], passphrase=registry.passphrase(parts[1]))["documents"]}
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "documents" and method in {"POST", "PUT"}:
                 body = self._read_json()
                 source_path = str(body.get("source_path") or body.get("path") or "")
                 if not source_path:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "source_path is required")
-                return _upsert_pack_document(registry.get(parts[1]), source_path, body)
+                return _upsert_pack_document(registry.get(parts[1]), source_path, body, passphrase=registry.passphrase(parts[1]))
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "verify" and method == "POST":
-                return verify_pack(registry.get(parts[1])).to_dict()
+                return verify_pack(registry.get(parts[1]), passphrase=registry.passphrase(parts[1])).to_dict()
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "index" and method == "POST":
                 body = self._read_json()
@@ -989,6 +1038,7 @@ def create_handler(registry: PackRegistry | None = None):
                     registry.get(parts[1]),
                     output_path=body.get("output_path"),
                     embed=bool(body.get("embed", True)),
+                    passphrase=registry.passphrase(parts[1]),
                 )
                 return {key: value for key, value in result.items() if key != "index"}
 
@@ -1004,6 +1054,7 @@ def create_handler(registry: PackRegistry | None = None):
                     language=body.get("language", "txt"),
                     index_path=body.get("index_path"),
                     build_if_missing=bool(body.get("build_if_missing", True)),
+                    passphrase=registry.passphrase(parts[1]),
                 )
                 for result in results:
                     source_path = result.get("source_path")
@@ -1016,18 +1067,18 @@ def create_handler(registry: PackRegistry | None = None):
                 output = body.get("output_dir")
                 if not output:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "output_dir is required")
-                results = unpack(registry.get(parts[1]), output)
+                results = unpack(registry.get(parts[1]), output, passphrase=registry.passphrase(parts[1]))
                 return {"results": results}
 
             if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
                 pack_id = parts[1]
                 document_path = "/".join(parts[3:])
-                return _decode_document(registry.get(pack_id), document_path)
+                return _decode_document(registry.get(pack_id), document_path, passphrase=registry.passphrase(pack_id))
 
             if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "documents" and method == "DELETE":
                 pack_id = parts[1]
                 document_path = "/".join(parts[3:])
-                return _delete_pack_document(registry.get(pack_id), document_path, self._read_json())
+                return _delete_pack_document(registry.get(pack_id), document_path, self._read_json(), passphrase=registry.passphrase(pack_id))
 
             raise ApiError(HTTPStatus.NOT_FOUND, "route not found")
 

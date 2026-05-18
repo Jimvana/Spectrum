@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import socket
@@ -8,9 +9,9 @@ import sys
 import threading
 from pathlib import Path
 
-from spectrum_core import pack
+from spectrum_core import is_encrypted_pack, pack
 from spectrum_cli.gui import asset_path, format_bytes, load_pack_details
-from spectrum_cli.main import main
+from spectrum_cli.main import command_project_init, main
 from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
 
 
@@ -113,6 +114,32 @@ def test_cli_pack_inspect_unpack_verify(tmp_path: Path, capsys) -> None:
     assert verify_output["valid"]
 
 
+def test_cli_encrypted_pack_unlock_workflow(tmp_path: Path, capsys, monkeypatch) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "secret.md").write_text("Encrypted CLI workflow.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    decoded = tmp_path / "decoded"
+    monkeypatch.setenv("SPECTRUM_PASSPHRASE", "six uncommon words for cli")
+
+    assert main(["pack", str(docs), str(pack_path), "--encrypt", "--hint", "cli hint", "--json"]) == 0
+    pack_output = json.loads(capsys.readouterr().out)
+    assert pack_output["encrypted"] is True
+
+    assert main(["inspect", str(pack_path), "--json"]) == 0
+    locked_output = json.loads(capsys.readouterr().out)
+    assert locked_output["locked"] is True
+    assert locked_output["hint"] == "cli hint"
+
+    assert main(["verify", str(pack_path), "--unlock", "--json"]) == 0
+    verify_output = json.loads(capsys.readouterr().out)
+    assert verify_output["valid"]
+
+    assert main(["unpack", str(pack_path), str(decoded), "--unlock", "--json"]) == 0
+    capsys.readouterr()
+    assert (decoded / "secret.md").read_text(encoding="utf-8") == "Encrypted CLI workflow.\n"
+
+
 def test_cli_append_adds_documents_to_existing_pack(tmp_path: Path, capsys) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -169,6 +196,74 @@ def test_cli_project_init_and_add_create_portable_pack(tmp_path: Path, capsys) -
     add_output = json.loads(capsys.readouterr().out)
     assert add_output["append"]["appended_entries"] == 1
     assert add_output["verify"]["valid"]
+
+
+def test_project_init_accepts_gui_namespace_without_encryption_flags(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "gui-site"
+    project.mkdir()
+    (project / "app.py").write_text("print('gui')\n", encoding="utf-8")
+    pack_path = tmp_path / "gui.specpack"
+
+    code = command_project_init(
+        argparse.Namespace(
+            source=str(project),
+            output=str(pack_path),
+            name="GUI Site",
+            replace_template=False,
+            no_index=True,
+            port=7777,
+            all=True,
+            language=None,
+            rle="off",
+            zlib_level=9,
+            verbose=False,
+            json=True,
+        )
+    )
+
+    assert code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["name"] == "GUI Site"
+    assert pack_path.exists()
+
+
+def test_project_init_accepts_gui_namespace_with_encryption_passphrase(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "gui-secret"
+    project.mkdir()
+    (project / "app.py").write_text("print('encrypted gui')\n", encoding="utf-8")
+    pack_path = tmp_path / "gui-secret.specpack"
+
+    code = command_project_init(
+        argparse.Namespace(
+            source=str(project),
+            output=str(pack_path),
+            name="GUI Secret",
+            replace_template=False,
+            no_index=True,
+            port=7777,
+            all=True,
+            language=None,
+            rle="off",
+            zlib_level=9,
+            verbose=False,
+            json=True,
+            encrypt=True,
+            passphrase="six uncommon words for gui test",
+            kdf_profile="low-memory",
+            hint="gui test hint",
+        )
+    )
+
+    assert code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["pack_summary"]["encrypted"] is True
+    assert is_encrypted_pack(pack_path)
+    locked = load_pack_details(pack_path)
+    unlocked = load_pack_details(pack_path, passphrase="six uncommon words for gui test")
+    assert locked.locked is True
+    assert locked.hint == "gui test hint"
+    assert unlocked.locked is False
+    assert unlocked.entries >= 1
 
 
 def test_cli_project_init_defaults_pack_to_spectrum_folder(tmp_path: Path, capsys) -> None:

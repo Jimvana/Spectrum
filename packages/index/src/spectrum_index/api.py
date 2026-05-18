@@ -10,7 +10,14 @@ from pathlib import Path
 from typing import Any
 
 import spectrum_core._repo as _repo  # noqa: F401 - ensures repo modules are importable.
-from spectrum_core import SpectrumPack
+from spectrum_core import (
+    EncryptOptions,
+    SpectrumPack,
+    decrypt_pack_bytes,
+    encrypt_pack_bytes,
+    inspect_encrypted_header,
+    is_encrypted_pack,
+)
 from rag.indexer import build_index as _build_spec_index
 from rag.indexer import index_directory, load_index as _load_index, save_index
 from rag.query import search as _search
@@ -24,20 +31,38 @@ def _quiet(enabled: bool):
     return contextlib.redirect_stdout(io.StringIO())
 
 
-def _replace_zip_member(zip_path: Path, member_path: Path, arcname: str) -> None:
+def _replace_zip_member(zip_path: Path, member_path: Path, arcname: str, *, passphrase: str | None = None) -> None:
     with tempfile.TemporaryDirectory(prefix="spectrum-index-zip-") as tmp_name:
         tmp_zip = Path(tmp_name) / zip_path.name
-        with zipfile.ZipFile(zip_path) as source, zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_STORED) as target:
+        encrypted = is_encrypted_pack(zip_path)
+        plain_path = zip_path
+        encrypted_info = inspect_encrypted_header(zip_path) if encrypted else None
+        if encrypted:
+            if passphrase is None:
+                raise ValueError("encrypted Spectrum pack is locked; unlock with a passphrase")
+            plain_path = Path(tmp_name) / "plain.specpack"
+            plain_path.write_bytes(decrypt_pack_bytes(zip_path.read_bytes(), passphrase))
+        with zipfile.ZipFile(plain_path) as source, zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_STORED) as target:
             for item in source.infolist():
                 if item.filename == arcname:
                     continue
                 target.writestr(item, source.read(item.filename))
             target.write(member_path, arcname)
-        shutil.move(str(tmp_zip), zip_path)
+        if encrypted:
+            assert encrypted_info is not None
+            zip_path.write_bytes(
+                encrypt_pack_bytes(
+                    tmp_zip.read_bytes(),
+                    passphrase or "",
+                    EncryptOptions(encrypted_info.kdf_profile or "interactive", encrypted_info.hint),
+                )
+            )
+        else:
+            shutil.move(str(tmp_zip), zip_path)
 
 
-def _extract_pack(pack_path: Path, tmp: Path) -> Path:
-    with SpectrumPack.open(pack_path) as pack:
+def _extract_pack(pack_path: Path, tmp: Path, *, passphrase: str | None = None) -> Path:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as pack:
         (tmp / "manifest.json").write_text(json.dumps(pack.manifest), encoding="utf-8")
         pack.extract_specs(tmp)
     return tmp / "files"
@@ -65,11 +90,9 @@ def _apply_pack_manifest_paths(index: dict, pack_root: Path) -> None:
             document["name"] = Path(source).name
 
 
-def _apply_pack_manifest_from_zip(index: dict, pack_path: Path) -> None:
-    with zipfile.ZipFile(pack_path) as archive:
-        if "manifest.json" not in archive.namelist():
-            return
-        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+def _apply_pack_manifest_from_zip(index: dict, pack_path: Path, *, passphrase: str | None = None) -> None:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        manifest = opened.manifest
     entries = {
         str(entry.get("spec", "")).replace("\\", "/"): str(entry.get("source", ""))
         for entry in manifest.get("entries", [])
@@ -88,6 +111,7 @@ def build_index(
     *,
     embed: bool = False,
     verbose: bool = False,
+    passphrase: str | None = None,
 ) -> dict[str, Any]:
     """Build a retrieval index for a `.spec`, `.spec` directory, or `.specpack`."""
     path = Path(target).expanduser().resolve()
@@ -95,7 +119,7 @@ def build_index(
         raise FileNotFoundError(path)
 
     if path.suffix.lower() == ".specpack":
-        return build_pack_index(path, output_path=output_path, embed=embed, verbose=verbose)
+        return build_pack_index(path, output_path=output_path, embed=embed, verbose=verbose, passphrase=passphrase)
 
     with _quiet(verbose):
         if path.is_file():
@@ -122,6 +146,7 @@ def build_pack_index(
     *,
     embed: bool = False,
     verbose: bool = False,
+    passphrase: str | None = None,
 ) -> dict[str, Any]:
     """Build an index for a `.specpack`, optionally embedding it as `index.bin`."""
     pack = Path(pack_path).expanduser().resolve()
@@ -130,7 +155,7 @@ def build_pack_index(
 
     with tempfile.TemporaryDirectory(prefix="spectrum-index-pack-") as tmp_name:
         tmp = Path(tmp_name)
-        files_dir = _extract_pack(pack, tmp)
+        files_dir = _extract_pack(pack, tmp, passphrase=passphrase)
         with _quiet(verbose):
             index = index_directory(files_dir)
         _apply_pack_manifest_paths(index, tmp)
@@ -138,7 +163,7 @@ def build_pack_index(
         with _quiet(verbose):
             save_index(index, index_path)
         if embed:
-            _replace_zip_member(pack, index_path, PACK_INDEX_NAME)
+            _replace_zip_member(pack, index_path, PACK_INDEX_NAME, passphrase=passphrase)
             final_path = f"{pack}#{PACK_INDEX_NAME}"
         elif output_path is not None:
             final_path = str(index_path)
@@ -160,15 +185,16 @@ def load_index(path: str | Path) -> dict:
         return _load_index(path)
 
 
-def _load_embedded_pack_index(pack_path: Path) -> dict | None:
-    with zipfile.ZipFile(pack_path) as archive:
+def _load_embedded_pack_index(pack_path: Path, *, passphrase: str | None = None) -> dict | None:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        archive = opened._zip
         if PACK_INDEX_NAME not in archive.namelist():
             return None
         with tempfile.TemporaryDirectory(prefix="spectrum-index-read-") as tmp_name:
             index_path = Path(tmp_name) / PACK_INDEX_NAME
             index_path.write_bytes(archive.read(PACK_INDEX_NAME))
             index = load_index(index_path)
-            _apply_pack_manifest_from_zip(index, pack_path)
+            _apply_pack_manifest_from_zip(index, pack_path, passphrase=passphrase)
             return index
 
 
@@ -201,20 +227,21 @@ def search_pack(
     language: str | int = "txt",
     index_path: str | Path | None = None,
     build_if_missing: bool = True,
+    passphrase: str | None = None,
 ) -> list[dict]:
     """Search a `.specpack` using an index file, embedded index, or temporary index."""
     pack = Path(pack_path).expanduser().resolve()
     if index_path is not None:
         return search_index(index_path, query, top_k=top_k, language=language)
 
-    embedded = _load_embedded_pack_index(pack)
+    embedded = _load_embedded_pack_index(pack, passphrase=passphrase)
     if embedded is not None:
         return search_index(embedded, query, top_k=top_k, language=language)
 
     if not build_if_missing:
         raise FileNotFoundError(f"no embedded {PACK_INDEX_NAME} in {pack}")
 
-    built = build_pack_index(pack)
+    built = build_pack_index(pack, passphrase=passphrase)
     return search_index(built["index"], query, top_k=top_k, language=language)
 
 
