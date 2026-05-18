@@ -1,0 +1,57 @@
+Use this prompt for the macOS agent:
+
+```text
+You are working in the Spectrum repo. Please replicate the Windows encryption upgrade and GUI build update for the macOS app.
+
+Start by pulling latest `main` from GitHub. The encryption implementation is already merged in commit:
+
+c65f2290d9f8dc9da65b0de81ce8529ffe135e84
+"Add encrypted specpack support"
+
+Your task is to build and verify the macOS GUI app with this new encryption flow.
+
+Important behavior to verify:
+- Plain `.specpack` files still open and serve without passphrase prompts.
+- The GUI offers an `Encrypt new pack` route when creating a specpack.
+- When encryption is selected, the GUI prompts for passphrase, confirmation, and optional hint.
+- The GUI can create an encrypted `.specpack`.
+- The GUI can inspect/open the encrypted pack after creation using the in-memory session passphrase.
+- Append/index/serve flows work for encrypted packs after unlock.
+- Passphrases must not be stored on disk, in metadata, logs, local storage, or launcher files.
+- Packaged app must include `cryptography`.
+
+Suggested steps:
+1. `git checkout main && git pull origin main`
+2. Run tests:
+   `python -m pytest packages`
+3. Build the macOS GUI app using the repo build script:
+   `python scripts/build-hub-gui.py --platform macos`
+4. Confirm the output exists, likely:
+   `dist/SpectrumHub.app`
+5. Inspect the packaged app contents and confirm `cryptography` is bundled.
+6. Launch the app on macOS and manually test:
+   - Create a normal unencrypted pack.
+   - Open and serve it.
+   - Create an encrypted pack using the new GUI checkbox.
+   - Confirm wrong/empty passphrase behavior is sane.
+   - Confirm the encrypted pack can be served after unlock.
+7. If packaging fails because PyInstaller or optional GUI deps are missing, install the local build dependencies equivalent to:
+   `python -m pip install --user --upgrade pyinstaller tkinterdnd2 pillow`
+8. If macOS needs extra PyInstaller hidden imports or data files for `cryptography`, update `scripts/build-hub-gui.py` in the least invasive way.
+9. Do not commit generated app bundles unless this repo already tracks them. Report exact artifact paths, timestamps, and any packaging changes needed.
+
+Expected source areas:
+- `packages/cli/src/spectrum_cli/gui.py`
+- `packages/cli/src/spectrum_cli/main.py`
+- `packages/core/src/spectrum_core/pack.py`
+- `packages/index/src/spectrum_index/api.py`
+- `packages/server/src/spectrum_server/app.py`
+- `scripts/build-hub-gui.py`
+
+Deliver back:
+- Whether tests passed.
+- Whether `dist/SpectrumHub.app` builds.
+- Whether `cryptography` is present inside the app bundle.
+- Manual GUI verification results for plain and encrypted packs.
+- Any macOS-specific code/build changes made.
+```
