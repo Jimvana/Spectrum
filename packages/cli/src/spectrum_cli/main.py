@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import getpass
 import importlib.util
 import json
 import os
@@ -168,6 +169,30 @@ def _confirm(message: str, *, default: bool) -> bool:
     return value in {"y", "yes"}
 
 
+def _read_passphrase(*, confirm: bool = False, allow_env: bool = True) -> str:
+    env_value = os.environ.get("SPECTRUM_PASSPHRASE") if allow_env else None
+    if env_value is not None:
+        print("spectrum: using SPECTRUM_PASSPHRASE; environment variables can leak secrets", file=sys.stderr)
+        if not env_value:
+            raise ValueError("passphrase must not be empty")
+        return env_value
+    prompt = "Create passphrase: " if confirm else "Unlock passphrase: "
+    value = getpass.getpass(prompt)
+    if not value:
+        raise ValueError("passphrase must not be empty")
+    if confirm:
+        repeated = getpass.getpass("Confirm passphrase: ")
+        if value != repeated:
+            raise ValueError("passphrases do not match")
+        if len(value) < 12:
+            print("spectrum: warning: short passphrases are easier to guess; prefer a long memorable phrase", file=sys.stderr)
+    return value
+
+
+def _unlock_passphrase(args: argparse.Namespace) -> str | None:
+    return _read_passphrase(confirm=False) if getattr(args, "unlock", False) else None
+
+
 def _default_pack_path(source: Path) -> Path:
     name = source.resolve().name if source.exists() else source.name
     if not name or name in {".", ".."}:
@@ -303,12 +328,13 @@ def _write_project_templates(context_root: Path, project_dir: Path, *, name: str
     return created
 
 
-def _write_project_launchers(pack_path: Path, *, name: str, port: int) -> list[Path]:
+def _write_project_launchers(pack_path: Path, *, name: str, port: int, encrypted: bool = False) -> list[Path]:
     runtime_dir = pack_path.parent
     runtime_dir.mkdir(parents=True, exist_ok=True)
     pack_name = pack_path.name
     dashboard_url = f"http://127.0.0.1:{port}/project"
     context_url = f"http://127.0.0.1:{port}/projects/repo/context"
+    unlock_flag = " --unlock" if encrypted else ""
     written: list[Path] = []
 
     files = {
@@ -318,7 +344,7 @@ $Pack = Join-Path $Root "{pack_name}"
 Write-Host "Starting Spectrum project server..."
 Write-Host "Dashboard: {dashboard_url}"
 Write-Host "Agent context: {context_url}"
-spectrum project serve "$Pack" --port {port}
+spectrum project serve "$Pack" --port {port}{unlock_flag}
 """,
         "start.cmd": f"""@echo off
 cd /d "%~dp0"
@@ -331,7 +357,7 @@ cd "$(dirname "$0")"
 echo "Starting Spectrum project server..."
 echo "Dashboard: {dashboard_url}"
 echo "Agent context: {context_url}"
-spectrum project serve "./{pack_name}" --port {port}
+spectrum project serve "./{pack_name}" --port {port}{unlock_flag}
 echo
 read -r -p "Press enter to close..."
 """,
@@ -341,7 +367,7 @@ cd "$(dirname "$0")"
 echo "Starting Spectrum project server..."
 echo "Dashboard: {dashboard_url}"
 echo "Agent context: {context_url}"
-spectrum project serve "./{pack_name}" --port {port}
+spectrum project serve "./{pack_name}" --port {port}{unlock_flag}
 """,
         "README.md": f"""# Spectrum Project Launcher
 
@@ -381,6 +407,7 @@ Linux:
 - Agent context: {context_url}
 
 The pack file is `{pack_name}`.
+{"It is encrypted; the launcher will prompt for the passphrase before serving." if encrypted else ""}
 """,
         "metadata.json": json.dumps(
             {
@@ -434,6 +461,8 @@ def command_decode(args: argparse.Namespace) -> int:
 def command_pack(args: argparse.Namespace) -> int:
     from spectrum_core import pack
 
+    encrypt = bool(getattr(args, "encrypt", False))
+    passphrase = _read_passphrase(confirm=True) if encrypt else None
     summary = pack(
         args.input,
         args.output,
@@ -442,6 +471,10 @@ def command_pack(args: argparse.Namespace) -> int:
         rle=args.rle,
         zlib_level=args.zlib_level,
         verbose=args.verbose,
+        encrypt=encrypt,
+        passphrase=passphrase,
+        kdf_profile=getattr(args, "kdf_profile", "interactive"),
+        hint=getattr(args, "hint", None),
     )
     emit(summary, as_json=args.json)
     return 0
@@ -450,6 +483,7 @@ def command_pack(args: argparse.Namespace) -> int:
 def command_append(args: argparse.Namespace) -> int:
     from spectrum_core import append_to_pack
 
+    passphrase = _unlock_passphrase(args)
     summary = append_to_pack(
         args.pack,
         args.input,
@@ -460,6 +494,7 @@ def command_append(args: argparse.Namespace) -> int:
         zlib_level=args.zlib_level,
         replace=args.replace,
         verbose=args.verbose,
+        passphrase=passphrase,
     )
     emit(summary, as_json=args.json)
     return 0
@@ -468,7 +503,7 @@ def command_append(args: argparse.Namespace) -> int:
 def command_unpack(args: argparse.Namespace) -> int:
     from spectrum_core import unpack
 
-    results = unpack(args.input, args.output, verbose=args.verbose)
+    results = unpack(args.input, args.output, verbose=args.verbose, passphrase=_unlock_passphrase(args))
     emit(results, as_json=args.json)
     return 0 if all(result.ok for result in results) else 1
 
@@ -478,7 +513,7 @@ def command_inspect(args: argparse.Namespace) -> int:
 
     path = Path(args.input)
     if path.suffix.lower() == ".specpack":
-        emit(inspect_pack(path), as_json=args.json)
+        emit(inspect_pack(path, passphrase=_unlock_passphrase(args)), as_json=args.json)
     else:
         emit(inspect_spec(path), as_json=args.json)
     return 0
@@ -487,7 +522,7 @@ def command_inspect(args: argparse.Namespace) -> int:
 def command_verify(args: argparse.Namespace) -> int:
     from spectrum_core import verify_path
 
-    report = verify_path(args.input)
+    report = verify_path(args.input, passphrase=_unlock_passphrase(args))
     emit(report.to_dict(), as_json=args.json)
     return 0 if report.valid else 1
 
@@ -495,7 +530,13 @@ def command_verify(args: argparse.Namespace) -> int:
 def command_index(args: argparse.Namespace) -> int:
     from spectrum_index import build_index
 
-    result = build_index(args.input, output_path=args.output, embed=args.embed, verbose=args.verbose)
+    result = build_index(
+        args.input,
+        output_path=args.output,
+        embed=args.embed,
+        verbose=args.verbose,
+        passphrase=_unlock_passphrase(args),
+    )
     payload = {key: value for key, value in result.items() if key != "index"}
     emit(payload, as_json=args.json)
     return 0
@@ -511,6 +552,7 @@ def command_search(args: argparse.Namespace) -> int:
         language=args.language,
         index_path=args.index,
         build_if_missing=not args.no_build,
+        passphrase=_unlock_passphrase(args),
     )
     emit(results, as_json=args.json)
     return 0
@@ -578,16 +620,19 @@ def command_serve(args: argparse.Namespace) -> int:
         )
 
     registry = PackRegistry()
+    passphrase = getattr(args, "passphrase", None)
+    if passphrase is None and getattr(args, "unlock", False):
+        passphrase = _read_passphrase(confirm=False)
     try:
         if args.specpack:
-            registry.add("repo", args.specpack)
+            registry.add("repo", args.specpack, passphrase=passphrase)
         for idx, value in enumerate(args.pack, start=1):
             if "=" in value:
                 pack_id, path = value.split("=", 1)
             else:
                 pack_id = f"pack-{idx}"
                 path = value
-            registry.add(pack_id, path)
+            registry.add(pack_id, path, passphrase=passphrase)
     except ApiError as exc:
         raise ValueError(exc.message) from exc
 
@@ -612,6 +657,12 @@ def command_project_init(args: argparse.Namespace) -> int:
 
     output = _normalize_load_output(Path(args.output).expanduser()) if args.output else _default_project_pack_path(project_dir)
     name = args.name or project_dir.resolve().name
+    encrypt = bool(getattr(args, "encrypt", False))
+    kdf_profile = getattr(args, "kdf_profile", "interactive")
+    hint = getattr(args, "hint", None)
+    passphrase = getattr(args, "passphrase", None)
+    if encrypt and passphrase is None:
+        passphrase = _read_passphrase(confirm=True)
     with tempfile.TemporaryDirectory(prefix="spectrum-project-context-") as tmp_name:
         context_root = Path(tmp_name)
         created = _write_project_templates(context_root, project_dir, name=name, replace=True)
@@ -624,6 +675,10 @@ def command_project_init(args: argparse.Namespace) -> int:
                 rle=args.rle,
                 zlib_level=args.zlib_level,
                 verbose=args.verbose,
+                encrypt=encrypt,
+                passphrase=passphrase,
+                kdf_profile=kdf_profile,
+                hint=hint,
             )
             pack_summary = append_to_pack(
                 output,
@@ -634,6 +689,7 @@ def command_project_init(args: argparse.Namespace) -> int:
                 rle=args.rle,
                 zlib_level=args.zlib_level,
                 verbose=args.verbose,
+                passphrase=passphrase,
             )
             pack_summary["context_entries"] = len(created)
         except ValueError as exc:
@@ -647,12 +703,16 @@ def command_project_init(args: argparse.Namespace) -> int:
                 rle=args.rle,
                 zlib_level=args.zlib_level,
                 verbose=args.verbose,
+                encrypt=encrypt,
+                passphrase=passphrase,
+                kdf_profile=kdf_profile,
+                hint=hint,
             )
-    launchers = _write_project_launchers(output, name=name, port=args.port)
-    verify_report = verify_pack(output).to_dict()
+    launchers = _write_project_launchers(output, name=name, port=args.port, encrypted=encrypt)
+    verify_report = verify_pack(output, passphrase=passphrase).to_dict()
     index_summary = None
     if not args.no_index:
-        result = build_index(output, embed=True, verbose=args.verbose)
+        result = build_index(output, embed=True, verbose=args.verbose, passphrase=passphrase)
         index_summary = {key: value for key, value in result.items() if key != "index"}
 
     payload = {
@@ -665,7 +725,7 @@ def command_project_init(args: argparse.Namespace) -> int:
         "pack_summary": pack_summary,
         "verify": verify_report,
         "index": index_summary,
-        "serve_command": f"spectrum project serve {_quote_command_arg(output)} --port {args.port}",
+        "serve_command": f"spectrum project serve {_quote_command_arg(output)} --port {args.port}{' --unlock' if encrypt else ''}",
         "dashboard_url": f"http://127.0.0.1:{args.port}/project",
         "context_endpoint": f"http://127.0.0.1:{args.port}/projects/repo/context",
     }
@@ -688,6 +748,7 @@ def command_project_add(args: argparse.Namespace) -> int:
     from spectrum_core import append_to_pack, verify_pack
     from spectrum_index import build_index
 
+    passphrase = _unlock_passphrase(args)
     append_summary = append_to_pack(
         args.pack,
         args.input,
@@ -697,11 +758,12 @@ def command_project_add(args: argparse.Namespace) -> int:
         zlib_level=args.zlib_level,
         replace=args.replace,
         verbose=args.verbose,
+        passphrase=passphrase,
     )
-    verify_report = verify_pack(args.pack).to_dict()
+    verify_report = verify_pack(args.pack, passphrase=passphrase).to_dict()
     index_summary = None
     if not args.no_index:
-        result = build_index(args.pack, embed=True, verbose=args.verbose)
+        result = build_index(args.pack, embed=True, verbose=args.verbose, passphrase=passphrase)
         index_summary = {key: value for key, value in result.items() if key != "index"}
     payload = {
         "pack": str(Path(args.pack).expanduser().resolve()),
@@ -714,7 +776,17 @@ def command_project_add(args: argparse.Namespace) -> int:
 
 
 def command_project_serve(args: argparse.Namespace) -> int:
-    return command_serve(argparse.Namespace(specpack=args.pack, pack=[], host=args.host, port=args.port, quiet=args.quiet))
+    return command_serve(
+        argparse.Namespace(
+            specpack=args.pack,
+            pack=[],
+            host=args.host,
+            port=args.port,
+            quiet=args.quiet,
+            unlock=getattr(args, "unlock", False),
+            passphrase=None,
+        )
+    )
 
 
 def command_project_restart(args: argparse.Namespace) -> int:
@@ -737,7 +809,7 @@ def command_project_restart(args: argparse.Namespace) -> int:
     if args.no_start:
         return 0
 
-    return command_project_serve(argparse.Namespace(pack=str(pack_path), host=args.host, port=args.port, quiet=args.quiet))
+    return command_project_serve(argparse.Namespace(pack=str(pack_path), host=args.host, port=args.port, quiet=args.quiet, unlock=getattr(args, "unlock", False)))
 
 
 def command_project(args: argparse.Namespace) -> int:
@@ -792,6 +864,9 @@ def command_hub_build(args: argparse.Namespace) -> int:
             zlib_level=args.zlib_level,
             verbose=args.verbose,
             json=args.json,
+            encrypt=getattr(args, "encrypt", False),
+            kdf_profile=getattr(args, "kdf_profile", "interactive"),
+            hint=getattr(args, "hint", None),
         )
     )
     if init_code:
@@ -810,17 +885,18 @@ def command_hub_build(args: argparse.Namespace) -> int:
                 zlib_level=args.zlib_level,
                 verbose=args.verbose,
                 json=args.json,
+                unlock=getattr(args, "unlock", False),
             )
         )
         if add_code:
             return add_code
 
     if args.no_serve:
-        print(f"Start it later with: spectrum project serve {_quote_command_arg(pack_text)} --port {port}")
+        print(f"Start it later with: spectrum project serve {_quote_command_arg(pack_text)} --port {port}{' --unlock' if getattr(args, 'encrypt', False) else ''}")
         return 0
     if args.yes or _confirm("Serve this project now?", default=True):
-        return command_project_serve(argparse.Namespace(pack=pack_text, host=args.host, port=port, quiet=False))
-    print(f"Start it later with: spectrum project serve {_quote_command_arg(pack_text)} --port {port}")
+        return command_project_serve(argparse.Namespace(pack=pack_text, host=args.host, port=port, quiet=False, unlock=getattr(args, "encrypt", False)))
+    print(f"Start it later with: spectrum project serve {_quote_command_arg(pack_text)} --port {port}{' --unlock' if getattr(args, 'encrypt', False) else ''}")
     return 0
 
 
@@ -843,6 +919,7 @@ def command_hub_append(args: argparse.Namespace) -> int:
                 zlib_level=args.zlib_level,
                 verbose=args.verbose,
                 json=args.json,
+                unlock=getattr(args, "unlock", False),
             )
         )
         if code:
@@ -858,7 +935,7 @@ def command_hub_serve(args: argparse.Namespace) -> int:
         port = int(port_text)
     except ValueError as exc:
         raise ValueError(f"invalid port: {port_text}") from exc
-    return command_project_serve(argparse.Namespace(pack=pack_text, host=args.host, port=port, quiet=False))
+    return command_project_serve(argparse.Namespace(pack=pack_text, host=args.host, port=port, quiet=False, unlock=getattr(args, "unlock", False)))
 
 
 def _probe_spectrum_server(host: str, port: int, timeout: float) -> dict[str, object]:
@@ -938,10 +1015,13 @@ def command_load(args: argparse.Namespace) -> int:
 
     if not source.exists():
         raise FileNotFoundError(source)
+    encrypt = bool(getattr(args, "encrypt", False))
+    kdf_profile = getattr(args, "kdf_profile", "interactive")
+    hint = getattr(args, "hint", None)
     commands = [
         "spectrum doctor",
-        f"spectrum pack {_quote_command_arg(source)} {_quote_command_arg(output)} --json",
-        f"spectrum serve {_quote_command_arg(output)} --port {port}",
+        f"spectrum pack {_quote_command_arg(source)} {_quote_command_arg(output)}{' --encrypt' if encrypt else ''} --json",
+        f"spectrum serve {_quote_command_arg(output)} --port {port}{' --unlock' if encrypt else ''}",
     ]
 
     print("Commands:")
@@ -961,22 +1041,25 @@ def command_load(args: argparse.Namespace) -> int:
     if doctor_code:
         return doctor_code
 
+    passphrase = _read_passphrase(confirm=True) if encrypt else None
     print()
     print(f"Packing {_quote_command_arg(source)} -> {_quote_command_arg(output)}")
-    pack_code = command_pack(
-        argparse.Namespace(
-            input=str(source),
-            output=str(output),
-            all=args.all,
-            language=args.language,
-            rle=args.rle,
-            zlib_level=args.zlib_level,
-            verbose=args.verbose,
-            json=True,
-        )
+    from spectrum_core import pack
+
+    summary = pack(
+        str(source),
+        str(output),
+        include_all=args.all,
+        language=args.language,
+        rle=args.rle,
+        zlib_level=args.zlib_level,
+        verbose=args.verbose,
+        encrypt=encrypt,
+        passphrase=passphrase,
+        kdf_profile=kdf_profile,
+        hint=hint,
     )
-    if pack_code:
-        return pack_code
+    emit(summary, as_json=True)
 
     print()
     print(f"Pack ready: {output}")
@@ -992,7 +1075,17 @@ def command_load(args: argparse.Namespace) -> int:
         print(f"Start it later with: {commands[-1]}")
         return 0
 
-    return command_serve(argparse.Namespace(specpack=str(output), pack=[], host="127.0.0.1", port=port, quiet=False))
+    return command_serve(
+        argparse.Namespace(
+            specpack=str(output),
+            pack=[],
+            host="127.0.0.1",
+            port=port,
+            quiet=False,
+            unlock=encrypt,
+            passphrase=passphrase,
+        )
+    )
 
 
 def _doctor_check(name: str, ok: bool, detail: str, fix: str | None = None) -> dict[str, object]:
@@ -1152,6 +1245,9 @@ def build_parser() -> argparse.ArgumentParser:
     pack_parser.add_argument("input")
     pack_parser.add_argument("output")
     pack_parser.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    pack_parser.add_argument("--encrypt", action="store_true", help="Encrypt the output .specpack")
+    pack_parser.add_argument("--kdf-profile", default="interactive", choices=["interactive", "strong", "low-memory"])
+    pack_parser.add_argument("--hint", help="Optional non-secret passphrase hint")
     add_common_codec_options(pack_parser)
     pack_parser.set_defaults(func=command_pack)
 
@@ -1160,6 +1256,7 @@ def build_parser() -> argparse.ArgumentParser:
     append.add_argument("input", help="File or folder to append")
     append.add_argument("-o", "--output", help="Write a new .specpack instead of updating in place")
     append.add_argument("--replace", action="store_true", help="Replace existing source paths in the pack")
+    append.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     append.add_argument("--all", action="store_true", help="Include every non-.spec file")
     add_common_codec_options(append)
     append.set_defaults(func=command_append)
@@ -1168,16 +1265,19 @@ def build_parser() -> argparse.ArgumentParser:
     unpack_parser.add_argument("input")
     unpack_parser.add_argument("output")
     unpack_parser.add_argument("--verbose", action="store_true")
+    unpack_parser.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     unpack_parser.add_argument("--json", action="store_true")
     unpack_parser.set_defaults(func=command_unpack)
 
     inspect = sub.add_parser("inspect", aliases=["info"], help="Inspect .spec or .specpack metadata")
     inspect.add_argument("input")
+    inspect.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     inspect.add_argument("--json", action="store_true")
     inspect.set_defaults(func=command_inspect)
 
     verify = sub.add_parser("verify", help="Verify .spec, .spec directory, or .specpack fidelity")
     verify.add_argument("input")
+    verify.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     verify.add_argument("--json", action="store_true")
     verify.set_defaults(func=command_verify)
 
@@ -1185,6 +1285,7 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("input")
     index.add_argument("-o", "--output", help="Output index path")
     index.add_argument("--embed", action="store_true", help="Embed index.bin into a .specpack")
+    index.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     index.add_argument("--verbose", action="store_true")
     index.add_argument("--json", action="store_true")
     index.set_defaults(func=command_index)
@@ -1196,6 +1297,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--language", default="txt")
     search.add_argument("--index", help="Use a separate index file")
     search.add_argument("--no-build", action="store_true", help="Fail if no index is available")
+    search.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     search.add_argument("--json", action="store_true")
     search.set_defaults(func=command_search)
 
@@ -1205,6 +1307,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=7777)
     serve.add_argument("--quiet", action="store_true")
+    serve.add_argument("--unlock", action="store_true", help="Prompt to unlock encrypted packs at startup")
     serve.set_defaults(func=command_serve)
 
     project = sub.add_parser("project", help="Portable project pack workflows")
@@ -1217,6 +1320,9 @@ def build_parser() -> argparse.ArgumentParser:
     project_init.add_argument("--name", help="Human-readable project name")
     project_init.add_argument("--replace-template", action="store_true", help="Overwrite existing context template files")
     project_init.add_argument("--no-index", action="store_true", help="Skip embedding a search index")
+    project_init.add_argument("--encrypt", action="store_true", help="Encrypt the output project .specpack")
+    project_init.add_argument("--kdf-profile", default="interactive", choices=["interactive", "strong", "low-memory"])
+    project_init.add_argument("--hint", help="Optional non-secret passphrase hint")
     project_init.add_argument("--port", type=int, default=7777, help="Port to show in the suggested serve command")
     project_init.add_argument("--all", action="store_true", help="Include every non-.spec file")
     add_common_codec_options(project_init)
@@ -1227,6 +1333,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_add.add_argument("input", help="File or folder to append")
     project_add.add_argument("--replace", action="store_true", help="Replace existing source paths in the pack")
     project_add.add_argument("--no-index", action="store_true", help="Skip rebuilding the embedded search index")
+    project_add.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     project_add.add_argument("--all", action="store_true", help="Include every non-.spec file")
     add_common_codec_options(project_add)
     project_add.set_defaults(func=command_project_add)
@@ -1236,6 +1343,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_serve.add_argument("--host", default="127.0.0.1")
     project_serve.add_argument("--port", type=int, default=7777)
     project_serve.add_argument("--quiet", action="store_true")
+    project_serve.add_argument("--unlock", action="store_true", help="Prompt to unlock encrypted packs at startup")
     project_serve.set_defaults(func=command_project_serve)
 
     project_restart = project_sub.add_parser("restart", help="Restart a local portable project server")
@@ -1246,6 +1354,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_restart.add_argument("--timeout", type=float, default=5.0, help="Seconds to wait for the old server to stop")
     project_restart.add_argument("--force", action="store_true", help="Restart even if the port is serving a different pack")
     project_restart.add_argument("--no-start", action="store_true", help="Stop the old server and exit without starting a new one")
+    project_restart.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack when restarted")
     project_restart.set_defaults(func=command_project_restart)
 
     hub = sub.add_parser("hub", help="Guided portable project hub")
@@ -1264,6 +1373,10 @@ def build_parser() -> argparse.ArgumentParser:
     hub.add_argument("--ports", default=None, help="Comma-separated ports for -v; default discovers local listening ports")
     hub.add_argument("--timeout", type=float, default=1.0, help="Per-port timeout for -v")
     hub.add_argument("--replace", action="store_true", help="Replace existing source paths when appending")
+    hub.add_argument("--encrypt", action="store_true", help="Encrypt created packs in build mode")
+    hub.add_argument("--unlock", action="store_true", help="Prompt to unlock encrypted packs in append or serve mode")
+    hub.add_argument("--kdf-profile", default="interactive", choices=["interactive", "strong", "low-memory"])
+    hub.add_argument("--hint", help="Optional non-secret passphrase hint")
     hub.add_argument("--yes", "-y", action="store_true", help="Accept prompts where possible")
     hub.add_argument("--no-serve", action="store_true", help="Build only and print the serve command")
     hub.add_argument("--all", action="store_true", help="Include every non-.spec file")
@@ -1275,6 +1388,9 @@ def build_parser() -> argparse.ArgumentParser:
     load.add_argument("output", nargs="?", help="Output .specpack path")
     load.add_argument("--port", type=int, default=7777)
     load.add_argument("--all", action="store_true", help="Include every non-.spec file")
+    load.add_argument("--encrypt", action="store_true", help="Encrypt the output .specpack")
+    load.add_argument("--kdf-profile", default="interactive", choices=["interactive", "strong", "low-memory"])
+    load.add_argument("--hint", help="Optional non-secret passphrase hint")
     load.add_argument("--language", help="Force a language instead of extension detection")
     load.add_argument("--rle", default="off", choices=["off", "auto", "force"], help="RLE mode")
     load.add_argument("--zlib-level", type=int, default=9, choices=range(1, 10), metavar="1-9")
