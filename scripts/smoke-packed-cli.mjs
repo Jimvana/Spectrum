@@ -114,7 +114,9 @@ try {
   );
 
   const packPath = join(workspace, "auth-service.specpack");
+  const encryptedPackPath = join(workspace, "auth-service-encrypted.specpack");
   const restored = join(workspace, "restored");
+  const encryptedRestored = join(workspace, "encrypted-restored");
 
   runSpectrum(globalRoot, ["doctor", "--json"], { cwd: workspace, stdio: "inherit" });
   runSpectrum(globalRoot, ["serve", "--help"], { cwd: workspace, stdio: "inherit" });
@@ -147,6 +149,59 @@ try {
     throw new Error("Decoded auth.js did not match the original source.");
   }
 
+  const encryptedEnv = {
+    ...process.env,
+    SPECTRUM_PASSPHRASE: "six uncommon words for packed smoke",
+  };
+  runSpectrum(
+    globalRoot,
+    ["pack", project, encryptedPackPath, "--encrypt", "--hint", "packed smoke hint", "--json"],
+    { cwd: workspace, stdio: "inherit", env: encryptedEnv },
+  );
+  const lockedInspect = JSON.parse(
+    runSpectrum(globalRoot, ["inspect", encryptedPackPath, "--json"], { cwd: workspace }),
+  );
+  if (!lockedInspect.encrypted || !lockedInspect.locked || lockedInspect.hint !== "packed smoke hint") {
+    throw new Error("Expected encrypted pack inspect to show locked metadata and hint.");
+  }
+  runSpectrum(globalRoot, ["verify", encryptedPackPath, "--unlock", "--json"], {
+    cwd: workspace,
+    stdio: "inherit",
+    env: encryptedEnv,
+  });
+  runSpectrum(globalRoot, ["index", encryptedPackPath, "--embed", "--unlock", "--json"], {
+    cwd: workspace,
+    stdio: "inherit",
+    env: encryptedEnv,
+  });
+  const encryptedSearchOutput = run(
+    process.execPath,
+    [
+      spectrumBinPath(globalRoot),
+      "search",
+      encryptedPackPath,
+      "authentication bearer middleware",
+      "--unlock",
+      "--top",
+      "1",
+      "--json",
+    ],
+    { cwd: workspace, env: encryptedEnv },
+  );
+  const encryptedSearchResults = JSON.parse(encryptedSearchOutput);
+  if (!Array.isArray(encryptedSearchResults) || encryptedSearchResults.length === 0) {
+    throw new Error("Expected at least one encrypted search result from packed CLI smoke test.");
+  }
+  runSpectrum(globalRoot, ["unpack", encryptedPackPath, encryptedRestored, "--unlock", "--json"], {
+    cwd: workspace,
+    stdio: "inherit",
+    env: encryptedEnv,
+  });
+  const encryptedDecoded = readFileSync(join(encryptedRestored, "src", "auth.js"), "utf8");
+  if (original !== encryptedDecoded) {
+    throw new Error("Encrypted decoded auth.js did not match the original source.");
+  }
+
   const port = await getFreePort();
   serverProcess = spawn(
     process.execPath,
@@ -176,6 +231,46 @@ try {
   const packs = await waitForJson(`http://127.0.0.1:${port}/packs`);
   if (!Array.isArray(packs.packs) || packs.packs[0]?.id !== "repo") {
     throw new Error("Expected spectrum serve to register the positional pack as id 'repo'.");
+  }
+  await stopProcess(serverProcess);
+  serverProcess = null;
+
+  const encryptedPort = await getFreePort();
+  serverProcess = spawn(
+    process.execPath,
+    [
+      spectrumBinPath(globalRoot),
+      "serve",
+      encryptedPackPath,
+      "--unlock",
+      "--port",
+      String(encryptedPort),
+      "--quiet",
+    ],
+    { cwd: workspace, stdio: ["ignore", "pipe", "pipe"], env: encryptedEnv },
+  );
+  serverStdout = "";
+  serverStderr = "";
+  serverProcess.stdout.on("data", (chunk) => {
+    serverStdout += chunk.toString();
+  });
+  serverProcess.stderr.on("data", (chunk) => {
+    serverStderr += chunk.toString();
+  });
+  serverProcess.once("exit", (code, signal) => {
+    if (code !== null && code !== 0 && code !== 130) {
+      console.error(`spectrum encrypted serve exited with ${code}${signal ? `/${signal}` : ""}`);
+      console.error(serverStdout);
+      console.error(serverStderr);
+    }
+  });
+  const encryptedHealth = await waitForJson(`http://127.0.0.1:${encryptedPort}/health`);
+  if (encryptedHealth.status !== "ok") {
+    throw new Error("Expected encrypted /health to report ok.");
+  }
+  const encryptedPacks = await waitForJson(`http://127.0.0.1:${encryptedPort}/packs`);
+  if (!Array.isArray(encryptedPacks.packs) || encryptedPacks.packs[0]?.locked) {
+    throw new Error("Expected encrypted spectrum serve --unlock to register an unlocked pack.");
   }
 
   console.log("Packed CLI smoke test passed.");
