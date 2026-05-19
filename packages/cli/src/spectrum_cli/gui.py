@@ -20,7 +20,7 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             os.environ.setdefault("SPECTRUM_REPO_ROOT", str(bundled_runtime))
             break
 
-from spectrum_core import append_to_pack, inspect_pack, is_encrypted_pack, verify_pack
+from spectrum_core import append_to_pack, export_distributable, inspect_pack, is_encrypted_pack, verify_pack
 from spectrum_index import build_index
 from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
 
@@ -105,6 +105,7 @@ class SpectrumHubGui:
         self.pack_name_var = tk.StringVar(value="No specpack loaded")
         self.pack_detail_var = tk.StringVar(value="Select or create a specpack to begin.")
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
+        self.backend_proxy_var = tk.StringVar(value="")
         self.server_var = tk.StringVar(value="Server stopped")
         self.replace_var = tk.BooleanVar(value=False)
         self.encrypt_var = tk.BooleanVar(value=False)
@@ -115,8 +116,8 @@ class SpectrumHubGui:
 
     def _build(self) -> None:
         self.root.title("Spectrum Hub")
-        self.root.geometry("720x520")
-        self.root.minsize(620, 460)
+        self.root.geometry("860x560")
+        self.root.minsize(760, 500)
         self._apply_icon()
 
         style = ttk.Style()
@@ -140,20 +141,25 @@ class SpectrumHubGui:
 
         pack_actions = ttk.Frame(main)
         pack_actions.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        pack_actions.columnconfigure(4, weight=1)
+        pack_actions.columnconfigure(7, weight=1)
         ttk.Button(pack_actions, text="Open Specpack", command=self.open_specpack).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(pack_actions, text="Create Specpack", command=self.create_specpack).grid(row=0, column=1, padx=(0, 8))
-        ttk.Checkbutton(pack_actions, text="Encrypt new pack", variable=self.encrypt_var).grid(row=0, column=2, padx=(8, 8))
-        ttk.Label(pack_actions, text="Port").grid(row=0, column=3, padx=(8, 6))
-        ttk.Entry(pack_actions, textvariable=self.port_var, width=8).grid(row=0, column=4, padx=(0, 8))
+        ttk.Button(pack_actions, text="Files", command=self.open_files_view).grid(row=0, column=2, padx=(0, 8))
+        ttk.Button(pack_actions, text="Export", command=self.export_distributable).grid(row=0, column=3, padx=(0, 8))
+        ttk.Checkbutton(pack_actions, text="Encrypt new pack", variable=self.encrypt_var).grid(row=0, column=4, padx=(8, 8))
+        ttk.Label(pack_actions, text="Port").grid(row=0, column=5, padx=(8, 6))
+        ttk.Entry(pack_actions, textvariable=self.port_var, width=8).grid(row=0, column=6, padx=(0, 8))
 
         server_actions = ttk.Frame(main)
         server_actions.grid(row=2, column=0, sticky="ew", pady=(0, 14))
-        server_actions.columnconfigure(4, weight=1)
+        server_actions.columnconfigure(7, weight=1)
         ttk.Button(server_actions, text="Start Server", command=self.start_server).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(server_actions, text="Stop Server", command=self.stop_server).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(server_actions, text="Open Dashboard", command=self.open_dashboard).grid(row=0, column=2, padx=(0, 8))
-        ttk.Label(server_actions, textvariable=self.server_var, style="Status.TLabel").grid(row=0, column=3, sticky="w")
+        ttk.Button(server_actions, text="Open App", command=self.open_app).grid(row=0, column=3, padx=(0, 8))
+        ttk.Label(server_actions, text="Backend").grid(row=0, column=4, padx=(8, 6))
+        ttk.Entry(server_actions, textvariable=self.backend_proxy_var, width=28).grid(row=0, column=5, padx=(0, 8))
+        ttk.Label(server_actions, textvariable=self.server_var, style="Status.TLabel").grid(row=0, column=6, sticky="w")
 
         append = ttk.LabelFrame(main, text="Append Documents", padding=12)
         append.grid(row=3, column=0, sticky="nsew")
@@ -358,6 +364,72 @@ class SpectrumHubGui:
             messagebox.showerror("Spectrum Hub", str(exc))
             self.append_status_var.set("Specpack creation failed.")
 
+    def export_distributable(self) -> None:
+        pack = self._require_pack()
+        if pack is None:
+            return
+        passphrase = self._passphrase_for_pack(pack)
+        if is_encrypted_pack(pack) and passphrase is None:
+            return
+        parent = filedialog.askdirectory(title="Choose where to create the decoded project folder")
+        if not parent:
+            return
+        self.append_status_var.set("Exporting specpack...")
+        threading.Thread(target=self._export_worker, args=(pack, Path(parent), passphrase), daemon=True).start()
+
+    def _export_worker(self, pack: Path, parent: Path, passphrase: str | None) -> None:
+        try:
+            summary = export_distributable(pack, parent, passphrase=passphrase)
+            self.root.after(0, self._after_export_success, summary)
+        except Exception as exc:
+            self.status_queue.put(("append", f"Export failed: {exc}"))
+            self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
+
+    def _after_export_success(self, summary: dict) -> None:
+        output_dir = str(summary.get("output_dir") or "")
+        restored = int(summary.get("restored_files") or 0)
+        encoded = int(summary.get("restored_encoded_entries") or 0)
+        external = int(summary.get("external_entries") or 0)
+        self.append_status_var.set(
+            f"Exported {restored} file{'s' if restored != 1 else ''} "
+            f"({encoded} encoded, {external} external) to {output_dir}."
+        )
+        messagebox.showinfo("Spectrum Hub", f"Export complete:\n{output_dir}")
+
+    def open_files_view(self) -> None:
+        pack = self._require_pack()
+        if pack is None:
+            return
+        passphrase = self._passphrase_for_pack(pack)
+        if is_encrypted_pack(pack) and passphrase is None:
+            return
+        self.append_status_var.set("Preparing files view...")
+        threading.Thread(target=self._files_view_worker, args=(pack, passphrase), daemon=True).start()
+
+    def _files_view_worker(self, pack: Path, passphrase: str | None) -> None:
+        try:
+            summary = inspect_pack(pack, passphrase=passphrase)
+            root_name = str(summary.get("source_root") or pack.stem)
+            parent = pack.with_suffix(".files")
+            target = parent / root_name
+            if not target.exists():
+                parent.mkdir(parents=True, exist_ok=True)
+                exported = export_distributable(pack, parent, folder_name=root_name, passphrase=passphrase)
+                target = Path(str(exported["output_dir"]))
+            self.root.after(0, self._after_files_view_ready, target)
+        except Exception as exc:
+            self.status_queue.put(("append", f"Files view failed: {exc}"))
+            self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
+
+    def _after_files_view_ready(self, folder: Path) -> None:
+        self.append_status_var.set(f"Files view ready: {folder}")
+        try:
+            os.startfile(str(folder))  # type: ignore[attr-defined]
+        except AttributeError:
+            webbrowser.open(folder.as_uri())
+        except Exception as exc:
+            messagebox.showerror("Spectrum Hub", f"Could not open files folder: {exc}")
+
     def set_pack(self, pack_path: str | Path) -> None:
         try:
             path = Path(pack_path).expanduser().resolve()
@@ -468,6 +540,9 @@ class SpectrumHubGui:
                 return
             registry = PackRegistry()
             registry.add("repo", pack, passphrase=passphrase)
+            backend_proxy = self.backend_proxy_var.get().strip()
+            if backend_proxy:
+                registry.set_app_proxy("repo", backend_proxy, routes=["/api/*"])
             server = SpectrumServer((HOST, port), create_handler(registry), quiet=True)
         except Exception as exc:
             messagebox.showerror("Spectrum Hub", str(exc))
@@ -500,6 +575,11 @@ class SpectrumHubGui:
         port = self._port()
         if port is not None:
             webbrowser.open(f"http://{HOST}:{port}/project")
+
+    def open_app(self) -> None:
+        port = self._port()
+        if port is not None:
+            webbrowser.open(f"http://{HOST}:{port}/apps/repo/")
 
     def close(self) -> None:
         self.stop_server()

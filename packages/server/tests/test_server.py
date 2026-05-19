@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from spectrum_core import pack
@@ -95,6 +96,14 @@ def test_server_pack_lifecycle(tmp_path: Path) -> None:
         assert status == 200
         assert unpacked["results"][0]["checksum_ok"]
         assert (decoded / "note.md").read_bytes() == (docs / "note.md").read_bytes()
+
+        exports = tmp_path / "exports"
+        exports.mkdir()
+        status, exported = request(port, "POST", "/packs/docs/export", {"parent_dir": str(exports)})
+        assert status == 200
+        assert exported["valid"]
+        assert Path(exported["output_dir"]).name == "docs"
+        assert (Path(exported["output_dir"]) / "note.md").read_bytes() == (docs / "note.md").read_bytes()
 
         status, packs = request(port, "GET", "/packs")
         assert status == 200
@@ -189,6 +198,65 @@ def test_server_serves_raw_pack_files_and_app_assets(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_server_proxies_configured_app_backend_routes(tmp_path: Path) -> None:
+    class BackendHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args) -> None:  # noqa: A002
+            return
+
+        def do_GET(self) -> None:
+            if self.path != "/api/snapshot":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps({"from_backend": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), BackendHandler)
+    backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
+    backend_thread.start()
+    backend_url = f"http://127.0.0.1:{backend.server_address[1]}"
+
+    docs = tmp_path / "site"
+    public = docs / "public"
+    config_dir = docs / ".spectrum-project"
+    public.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    (public / "index.html").write_text("app", encoding="utf-8")
+    (config_dir / "app.json").write_text(
+        json.dumps({"backend": {"mode": "proxy", "target": backend_url, "routes": ["/api/*"]}}),
+        encoding="utf-8",
+    )
+    pack_path = tmp_path / "site.specpack"
+    pack(docs, pack_path, include_all=True)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        status, proxied = request(port, "GET", "/api/snapshot")
+        assert status == 200
+        assert proxied == {"from_backend": True}
+
+        status, manifest = request(port, "GET", "/packs/repo/manifest")
+        assert status == 200
+        assert manifest["app"]["backend"]["target"] == backend_url
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        backend.shutdown()
+        backend.server_close()
+        backend_thread.join(timeout=5)
 
 
 def test_server_builds_project_context_bundle(tmp_path: Path) -> None:

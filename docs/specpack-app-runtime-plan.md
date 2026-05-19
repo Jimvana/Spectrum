@@ -53,6 +53,8 @@ Validation:
 
 ## Phase 2: Pack-Aware App Manifest
 
+Status: initial implementation.
+
 Add a small manifest layer that describes how an app inside a pack should be served or run.
 
 Possible file names:
@@ -82,7 +84,7 @@ Example:
 
 Deliverables:
 
-- Detect app metadata from the pack manifest.
+- Detect app metadata from `.spectrum-project/app.json`, `.spectrum/app.json`, or `spectrum.app.json`.
 - Expose it in `GET /packs/{pack_id}/manifest`.
 - Show app/runtime state in the Hub GUI.
 - Let users pick a serving mode:
@@ -90,7 +92,15 @@ Deliverables:
   - proxy backend
   - unpack-and-run
 
+Implemented so far:
+
+- App manifest discovery from packed JSON files.
+- Manifest exposure under the `app` field.
+- Hub backend proxy target field for a manual `/api/*` proxy override.
+
 ## Phase 3: Backend Route Support
+
+Status: initial proxy mode.
 
 Dynamic web apps need more than static file serving. Spectrum should support backend routes through explicit runtime modes.
 
@@ -148,9 +158,18 @@ Recommendation:
 
 Implement proxy mode first, then unpack-and-run. Keep Spectrum-native APIs as a future capability.
 
+Implemented so far:
+
+- Proxy mode for configured `/api/*` style routes.
+- Manifest-based proxy target support.
+- Hub manual backend target support.
+- Backend responses are relayed to the browser instead of Spectrum returning `route not found`.
+
 ## Phase 4: Editable Virtual Filesystem
 
 Agents should be able to work directly inside the `.specpack` without requiring a full repo checkout.
+
+Status: early files-view support.
 
 Deliverables:
 
@@ -176,6 +195,16 @@ Important behavior:
 - Text/code edits should update the `.specpack`.
 - Media/model replacements should update the `.media` sidecar and manifest references.
 - The server should expose enough metadata for agents to avoid accidentally editing generated or external files.
+
+Implemented so far:
+
+- Hub `Files` button creates or reuses a normal exported folder next to the specpack, then opens it in Explorer.
+- Files in that exported folder can be launched by Windows as normal files, including scripts and batch files.
+
+Not implemented yet:
+
+- Syncing edits made in the exported files view back into the `.specpack`.
+- A true Windows virtual folder or mounted filesystem view.
 
 ## Phase 5: Agent Coding Workflow
 

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -423,6 +424,21 @@ def _sidecar_rel_for_pack(output: Path) -> str:
     return _sidecar_dir_for_pack(output).name
 
 
+def _safe_export_folder_name(value: str) -> str:
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", value).strip(" .-")
+    return name or "spectrum-export"
+
+
+def _unique_child_dir(parent: Path, name: str) -> Path:
+    base = _safe_export_folder_name(name)
+    candidate = parent / base
+    suffix = 2
+    while candidate.exists():
+        candidate = parent / f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 def _copy_external_file(source: Path, sidecar_dir: Path) -> tuple[str, str, int]:
     digest = hashlib.sha256()
     size = 0
@@ -836,6 +852,51 @@ def unpack(
                 )
             opened.restore_external_files(target)
     return results
+
+
+def export_distributable(
+    pack_path: str | Path,
+    parent_dir: str | Path,
+    *,
+    folder_name: str | None = None,
+    verbose: bool = False,
+    passphrase: str | None = None,
+) -> dict[str, Any]:
+    """Restore a `.specpack` into a new project folder under ``parent_dir``."""
+    pack_file = Path(pack_path).expanduser().resolve()
+    parent = Path(parent_dir).expanduser().resolve()
+    if not parent.exists():
+        raise FileNotFoundError(parent)
+    if not parent.is_dir():
+        raise NotADirectoryError(parent)
+
+    with SpectrumPack.open(pack_file, passphrase=passphrase) as opened:
+        source_root = str(opened.manifest.get("source_root") or "").strip()
+        encoded_count = len(opened.entries)
+        external_count = len(opened.external_entries)
+
+    root_name = folder_name or source_root or pack_file.stem
+    target = _unique_child_dir(parent, root_name)
+    target.mkdir(parents=True)
+    try:
+        results = unpack(pack_file, target, verbose=verbose, passphrase=passphrase)
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+
+    restored_encoded = sum(1 for result in results if result.ok)
+    restored_files = sum(1 for path in target.rglob("*") if path.is_file())
+    return {
+        "pack_path": str(pack_file),
+        "output_dir": str(target),
+        "source_root": source_root,
+        "encoded_entries": encoded_count,
+        "external_entries": external_count,
+        "restored_encoded_entries": restored_encoded,
+        "restored_files": restored_files,
+        "valid": restored_encoded == encoded_count,
+        "results": results,
+    }
 
 
 def decode_member(

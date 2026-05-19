@@ -12,7 +12,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from spectrum_core import (
     EncryptOptions,
@@ -22,6 +24,7 @@ from spectrum_core import (
     decode_member,
     encode_file,
     encrypt_pack_bytes,
+    export_distributable,
     inspect_pack,
     inspect_encrypted_header,
     is_encrypted_pack,
@@ -81,6 +84,13 @@ class RawFileResponse:
     status: HTTPStatus = HTTPStatus.OK
 
 
+@dataclass(frozen=True)
+class ProxyResponse:
+    body: bytes
+    status: int
+    headers: dict[str, str]
+
+
 def _json_default(value: Any):
     if isinstance(value, Path):
         return str(value)
@@ -102,6 +112,7 @@ class PackRegistry:
     def __init__(self) -> None:
         self._packs: dict[str, Path] = {}
         self._passphrases: dict[str, str] = {}
+        self._app_proxy_overrides: dict[str, dict[str, Any]] = {}
         self.lock = threading.RLock()
 
     def add(self, pack_id: str, path: str | Path, *, passphrase: str | None = None) -> dict:
@@ -126,9 +137,29 @@ class PackRegistry:
         except KeyError as exc:
             raise ApiError(HTTPStatus.NOT_FOUND, f"unknown pack: {pack_id}") from exc
 
+    def has(self, pack_id: str) -> bool:
+        return pack_id in self._packs
+
     def passphrase(self, pack_id: str) -> str | None:
         self.get(pack_id)
         return self._passphrases.get(pack_id)
+
+    def set_app_proxy(self, pack_id: str, target: str, *, routes: list[str] | None = None) -> None:
+        self.get(pack_id)
+        parsed = urlparse(target)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "proxy target must be an http(s) URL")
+        self._app_proxy_overrides[pack_id] = {
+            "backend": {
+                "mode": "proxy",
+                "target": target.rstrip("/"),
+                "routes": routes or ["/api/*"],
+            }
+        }
+
+    def app_proxy_override(self, pack_id: str) -> dict[str, Any] | None:
+        self.get(pack_id)
+        return self._app_proxy_overrides.get(pack_id)
 
     def remove(self, pack_id: str) -> dict:
         path = self.get(pack_id)
@@ -170,6 +201,98 @@ def _decode_document(pack_path: Path, source_path: str, *, passphrase: str | Non
         }
 
 
+def _decode_json_document(pack_path: Path, candidates: list[str], *, passphrase: str | None = None) -> dict[str, Any] | None:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        available = {entry.source for entry in opened.entries}
+    source_path = next((candidate for candidate in candidates if candidate in available), None)
+    if source_path is None:
+        return None
+    decoded = _decode_document(pack_path, source_path, passphrase=passphrase)
+    try:
+        data = json.loads(decoded["content"])
+    except json.JSONDecodeError as exc:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"invalid app manifest JSON in {source_path}: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"app manifest must be a JSON object: {source_path}")
+    data["_source_path"] = source_path
+    return data
+
+
+def _pack_app_config(
+    pack_path: Path,
+    *,
+    passphrase: str | None = None,
+    override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = _decode_json_document(
+        pack_path,
+        [f"{PROJECT_CONTEXT_DIR}/app.json", ".spectrum/app.json", "spectrum.app.json"],
+        passphrase=passphrase,
+    ) or {}
+    if override:
+        merged = dict(config)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+        config = merged
+    config.setdefault("entry", "public/index.html")
+    return config
+
+
+def _route_matches(pattern: str, request_path: str) -> bool:
+    pattern = "/" + pattern.strip("/")
+    path = "/" + request_path.strip("/")
+    if pattern.endswith("/*"):
+        return path == pattern[:-2] or path.startswith(pattern[:-1])
+    return path == pattern
+
+
+def _proxy_config_for_request(app_config: dict[str, Any], request_path: str) -> dict[str, Any] | None:
+    backend = app_config.get("backend")
+    if not isinstance(backend, dict) or backend.get("mode") != "proxy":
+        return None
+    target = str(backend.get("target") or "").strip()
+    if not target:
+        return None
+    routes = backend.get("routes") or ["/api/*"]
+    if not isinstance(routes, list):
+        return None
+    if any(_route_matches(str(route), request_path) for route in routes):
+        return {"target": target.rstrip("/"), "routes": routes}
+    return None
+
+
+def _proxy_request(method: str, request_path: str, query: str, body: bytes, headers: dict[str, str], target: str) -> ProxyResponse:
+    url = urljoin(f"{target}/", request_path.lstrip("/"))
+    if query:
+        url = f"{url}?{query}"
+    forwarded_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}
+    }
+    request = Request(url, data=body if body else None, headers=forwarded_headers, method=method)
+    try:
+        with urlopen(request, timeout=20) as response:
+            response_headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() not in {"connection", "transfer-encoding", "content-encoding"}
+            }
+            return ProxyResponse(response.read(), response.status, response_headers)
+    except HTTPError as exc:
+        response_headers = {
+            key: value
+            for key, value in exc.headers.items()
+            if key.lower() not in {"connection", "transfer-encoding", "content-encoding"}
+        }
+        return ProxyResponse(exc.read(), exc.code, response_headers)
+    except Exception as exc:
+        raise ApiError(HTTPStatus.BAD_GATEWAY, f"app backend proxy failed: {exc}") from exc
+
+
 def _content_type(source_path: str) -> str:
     guessed, _encoding = mimetypes.guess_type(source_path)
     if guessed:
@@ -200,15 +323,19 @@ def _raw_pack_file(pack_path: Path, source_path: str, *, passphrase: str | None 
 def _app_source_candidates(path: str) -> list[str]:
     source = path.strip("/")
     if not source:
-        return ["public/index.html", "index.html"]
+        return ["public/index.html", "index.html", "dist/index.html", "build/index.html"]
     if source.endswith("/"):
         source = f"{source}index.html"
     candidates = []
     if not source.startswith("public/"):
         candidates.append(f"public/{source}")
+    if not source.startswith("dist/"):
+        candidates.append(f"dist/{source}")
+    if not source.startswith("build/"):
+        candidates.append(f"build/{source}")
     candidates.append(source)
     if "." not in Path(source).name:
-        candidates.extend(["public/index.html", "index.html"])
+        candidates.extend(["public/index.html", "index.html", "dist/index.html", "build/index.html"])
     return candidates
 
 
@@ -393,6 +520,7 @@ def _pack_manifest(pack_path: Path, pack_id: str, *, passphrase: str | None = No
             "version": opened.manifest.get("version"),
             "dict_version": opened.manifest.get("dict_version"),
             "source_root": opened.manifest.get("source_root"),
+            "app": _pack_app_config(pack_path, passphrase=passphrase),
             "documents": documents,
         }
 
@@ -1021,6 +1149,9 @@ def create_handler(registry: PackRegistry | None = None):
         def do_POST(self) -> None:
             self._handle("POST")
 
+        def do_PUT(self) -> None:
+            self._handle("PUT")
+
         def do_DELETE(self) -> None:
             self._handle("DELETE")
 
@@ -1034,6 +1165,8 @@ def create_handler(registry: PackRegistry | None = None):
                     self._send_raw(payload.body, payload.content_type, status=payload.status)
                 elif isinstance(payload, RawFileResponse):
                     self._send_file(payload.path, payload.content_type, status=payload.status)
+                elif isinstance(payload, ProxyResponse):
+                    self._send_proxy(payload)
                 else:
                     self._send_json(payload)
             except ApiError as exc:
@@ -1048,6 +1181,7 @@ def create_handler(registry: PackRegistry | None = None):
         def _route(self, method: str) -> Any:
             parsed = urlparse(self.path)
             parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+            request_path = parsed.path or "/"
 
             if method == "GET" and parts in ([], ["project"], ["dashboard"]):
                 return HtmlResponse(_project_dashboard_html())
@@ -1059,6 +1193,23 @@ def create_handler(registry: PackRegistry | None = None):
                 pack_id = parts[1]
                 app_path = "/".join(parts[2:])
                 return _raw_app_file(registry.get(pack_id), app_path, passphrase=registry.passphrase(pack_id))
+
+            if parts and parts[0] == "api" and registry.has("repo"):
+                app_config = _pack_app_config(
+                    registry.get("repo"),
+                    passphrase=registry.passphrase("repo"),
+                    override=registry.app_proxy_override("repo"),
+                )
+                proxy = _proxy_config_for_request(app_config, request_path)
+                if proxy is not None:
+                    return _proxy_request(
+                        method,
+                        request_path,
+                        parsed.query,
+                        self._read_body(),
+                        dict(self.headers.items()),
+                        proxy["target"],
+                    )
 
             if method == "POST" and parts == ["shutdown"]:
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -1148,6 +1299,18 @@ def create_handler(registry: PackRegistry | None = None):
                 results = unpack(registry.get(parts[1]), output, passphrase=registry.passphrase(parts[1]))
                 return {"results": results}
 
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "export" and method == "POST":
+                body = self._read_json()
+                parent = body.get("parent_dir") or body.get("output_parent")
+                if not parent:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "parent_dir is required")
+                return export_distributable(
+                    registry.get(parts[1]),
+                    parent,
+                    folder_name=body.get("folder_name"),
+                    passphrase=registry.passphrase(parts[1]),
+                )
+
             if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
                 pack_id = parts[1]
                 document_path = "/".join(parts[3:])
@@ -1173,10 +1336,16 @@ def create_handler(registry: PackRegistry | None = None):
             raise ApiError(HTTPStatus.NOT_FOUND, "route not found")
 
         def _read_json(self) -> dict:
+            body = self._read_body()
+            if not body:
+                return {}
+            return json.loads(body.decode("utf-8"))
+
+        def _read_body(self) -> bytes:
             length = int(self.headers.get("content-length", "0") or "0")
             if length <= 0:
-                return {}
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+                return b""
+            return self.rfile.read(length)
 
         def _send_json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload, default=_json_default, indent=2).encode("utf-8")
@@ -1210,6 +1379,20 @@ def create_handler(registry: PackRegistry | None = None):
             self.end_headers()
             with path.open("rb") as handle:
                 shutil.copyfileobj(handle, self.wfile, length=1024 * 1024)
+
+        def _send_proxy(self, payload: ProxyResponse) -> None:
+            self.send_response(payload.status)
+            sent_length = False
+            for key, value in payload.headers.items():
+                if key.lower() in {"connection", "transfer-encoding"}:
+                    continue
+                if key.lower() == "content-length":
+                    sent_length = True
+                self.send_header(key, value)
+            if not sent_length:
+                self.send_header("content-length", str(len(payload.body)))
+            self.end_headers()
+            self.wfile.write(payload.body)
 
     return SpectrumHandler
 

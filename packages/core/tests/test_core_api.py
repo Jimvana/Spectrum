@@ -11,6 +11,7 @@ from spectrum_core import (
     decode_file,
     encode_file,
     encrypt_pack_bytes,
+    export_distributable,
     decrypt_pack_bytes,
     inspect_pack,
     inspect_encrypted_header,
@@ -110,6 +111,32 @@ def test_pack_externalizes_media_and_model_sidecar(tmp_path: Path) -> None:
         assert len(opened.entries) == 1
         assert len(opened.external_entries) == 2
         assert all(entry.sidecar_path.startswith("project.media/blobs/") for entry in opened.external_entries)
+
+
+def test_export_distributable_creates_new_project_folder(tmp_path: Path) -> None:
+    source_dir = tmp_path / "project"
+    assets = source_dir / "assets"
+    assets.mkdir(parents=True)
+    (source_dir / "README.md").write_text("# Export\n", encoding="utf-8")
+    image_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(16))
+    (assets / "logo.png").write_bytes(image_bytes)
+    pack_path = tmp_path / "project.specpack"
+    pack(source_dir, pack_path, include_all=True)
+    parent = tmp_path / "exports"
+    parent.mkdir()
+
+    first = export_distributable(pack_path, parent)
+    second = export_distributable(pack_path, parent)
+
+    first_dir = Path(first["output_dir"])
+    second_dir = Path(second["output_dir"])
+    assert first_dir.name == "project"
+    assert second_dir.name == "project-2"
+    assert first["valid"] is True
+    assert first["restored_encoded_entries"] == 1
+    assert first["external_entries"] == 1
+    assert (first_dir / "README.md").read_text(encoding="utf-8") == "# Export\n"
+    assert (first_dir / "assets" / "logo.png").read_bytes() == image_bytes
 
 
 def test_encrypted_pack_round_trip_requires_passphrase(tmp_path: Path) -> None:
