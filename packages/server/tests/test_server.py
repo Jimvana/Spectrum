@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from spectrum_core import pack
+import spectrum_server.app as app_module
 from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
 
 
@@ -198,6 +199,79 @@ def test_server_serves_raw_pack_files_and_app_assets(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_server_files_endpoint_filters_generated_paths(tmp_path: Path) -> None:
+    docs = tmp_path / "repo"
+    (docs / "src").mkdir(parents=True)
+    (docs / "dist").mkdir()
+    (docs / "src" / "app.py").write_text("print('source')\n", encoding="utf-8")
+    (docs / "dist" / "bundle.js").write_text("console.log('generated')\n", encoding="utf-8")
+    image = b"\x89PNG\r\n\x1a\n" + bytes(range(8))
+    (docs / "src" / "logo.png").write_bytes(image)
+    pack_path = tmp_path / "repo.specpack"
+    pack(docs, pack_path, include_all=True)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        status, files = request(port, "GET", "/packs/repo/files")
+        assert status == 200
+        assert {item["source_path"] for item in files["files"]} == {"src/app.py", "src/logo.png"}
+        assert files["files"][0]["raw_url"].startswith("/packs/repo/raw/")
+
+        status, all_files = request(port, "GET", "/packs/repo/files?include_generated=true")
+        assert status == 200
+        assert {item["source_path"] for item in all_files["files"]} == {
+            "dist/bundle.js",
+            "src/app.py",
+            "src/logo.png",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_caches_decoded_raw_files(tmp_path: Path, monkeypatch) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("Cached raw document.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(docs, pack_path)
+    calls = 0
+    original_decode_member = app_module.decode_member
+    app_module._DECODE_CACHE.invalidate()
+
+    def counting_decode_member(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_decode_member(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "decode_member", counting_decode_member)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        first = text_request(port, "GET", "/packs/repo/raw/note.md")
+        second = text_request(port, "GET", "/packs/repo/raw/note.md")
+        assert first == second
+        assert calls == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        app_module._DECODE_CACHE.invalidate()
 
 
 def test_server_proxies_configured_app_backend_routes(tmp_path: Path) -> None:

@@ -55,6 +55,40 @@ EXTERNAL_MEDIA_EXTENSIONS = {
     ".sqlite", ".sqlite3", ".tflite", ".weights",
 }
 
+DEFAULT_PROJECT_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    "bower_components",
+    "dist",
+    "build",
+    "dist-installer-build",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    "coverage",
+    "htmlcov",
+    ".coverage",
+}
+
+GENERATED_PATH_PARTS = DEFAULT_PROJECT_SKIP_DIRS | {
+    "_internal",
+    "external_repos",
+}
+GENERATED_PATH_PARTS_LOWER = {part.lower() for part in GENERATED_PATH_PARTS}
+LEGACY_ALWAYS_SKIP_DIRS = {".git", "node_modules", "__pycache__"}
+LEGACY_ALWAYS_SKIP_DIRS_LOWER = {part.lower() for part in LEGACY_ALWAYS_SKIP_DIRS}
+
 
 @dataclass(frozen=True)
 class PackEntry:
@@ -385,20 +419,40 @@ def _validate_external_entry(raw: dict) -> ExternalEntry:
     )
 
 
-def iter_source_files(root: str | Path, *, include_all: bool = False) -> Iterable[Path]:
+def is_generated_path(path: str | Path) -> bool:
+    parts = {part.lower() for part in Path(str(path).replace("\\", "/")).parts}
+    return bool(parts & GENERATED_PATH_PARTS_LOWER)
+
+
+def iter_source_files(root: str | Path, *, include_all: bool = False, include_generated: bool = True) -> Iterable[Path]:
     root_path = Path(root)
     if root_path.is_file():
         yield root_path
         return
-    for path in sorted(root_path.rglob("*")):
-        if not path.is_file():
-            continue
-        if any(part in {".git", "node_modules", "__pycache__"} for part in path.parts):
-            continue
-        if path.suffix.lower() in {".spec", ".specpack"}:
-            continue
-        if include_all or path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            yield path
+    for current, dirnames, filenames in os.walk(root_path):
+        current_path = Path(current)
+        try:
+            rel_dir = current_path.relative_to(root_path)
+        except ValueError:
+            rel_dir = Path()
+        if include_generated:
+            dirnames[:] = sorted(
+                dirname
+                for dirname in dirnames
+                if dirname.lower() not in LEGACY_ALWAYS_SKIP_DIRS_LOWER
+            )
+        else:
+            dirnames[:] = sorted(
+                dirname
+                for dirname in dirnames
+                if not is_generated_path(rel_dir / dirname)
+            )
+        for filename in sorted(filenames):
+            path = current_path / filename
+            if path.suffix.lower() in {".spec", ".specpack"}:
+                continue
+            if include_all or path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                yield path
 
 
 def is_external_media_file(path: str | Path) -> bool:
@@ -606,6 +660,7 @@ def pack(
     kdf_profile: str = "interactive",
     hint: str | None = None,
     externalize_media: bool = True,
+    include_generated: bool = True,
 ) -> dict:
     """Create a `.specpack` archive from a file or folder."""
     source = Path(input_path).resolve()
@@ -614,7 +669,10 @@ def pack(
         raise FileNotFoundError(source)
 
     base = source.parent if source.is_file() else source
-    files, external_files = _split_pack_inputs(iter_source_files(source, include_all=include_all), externalize_media=externalize_media)
+    files, external_files = _split_pack_inputs(
+        iter_source_files(source, include_all=include_all, include_generated=include_generated),
+        externalize_media=externalize_media,
+    )
     if not files and not external_files:
         raise ValueError(f"no encodable files found under {source}")
 
@@ -692,6 +750,7 @@ def append_to_pack(
     kdf_profile: str | None = None,
     hint: str | None = None,
     externalize_media: bool = True,
+    include_generated: bool = True,
 ) -> dict:
     """Append source files to an existing `.specpack`.
 
@@ -712,7 +771,10 @@ def append_to_pack(
         raise FileNotFoundError(source)
 
     base = source.parent if source.is_file() else source
-    files, external_files = _split_pack_inputs(iter_source_files(source, include_all=include_all), externalize_media=externalize_media)
+    files, external_files = _split_pack_inputs(
+        iter_source_files(source, include_all=include_all, include_generated=include_generated),
+        externalize_media=externalize_media,
+    )
     if not files and not external_files:
         raise ValueError(f"no encodable files found under {source}")
 

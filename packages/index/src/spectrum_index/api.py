@@ -17,6 +17,7 @@ from spectrum_core import (
     encrypt_pack_bytes,
     inspect_encrypted_header,
     is_encrypted_pack,
+    is_generated_path,
 )
 from rag.indexer import build_index as _build_spec_index
 from rag.indexer import index_directory, load_index as _load_index, save_index
@@ -204,19 +205,26 @@ def search_index(
     *,
     top_k: int = 10,
     language: str | int = "txt",
+    include_generated: bool = False,
 ) -> list[dict]:
     """Search a loaded index or index file path."""
     loaded = load_index(index) if isinstance(index, (str, Path)) else index
     with _quiet(False):
-        results = _search(query, loaded, top_k=top_k, lang=language)
+        results = _search(query, loaded, top_k=max(top_k * 4, top_k), lang=language)
     documents = loaded.get("documents", [])
+    filtered: list[dict] = []
     for result in results:
         doc_id = int(result.get("doc_id", -1))
         if 0 <= doc_id < len(documents):
             doc = documents[doc_id]
             if "source_path" in doc:
                 result["source_path"] = doc["source_path"]
-    return results
+        source_path = str(result.get("source_path") or result.get("path") or "")
+        if include_generated or not is_generated_path(source_path):
+            filtered.append(result)
+        if len(filtered) >= top_k:
+            break
+    return filtered
 
 
 def search_pack(
@@ -228,21 +236,22 @@ def search_pack(
     index_path: str | Path | None = None,
     build_if_missing: bool = True,
     passphrase: str | None = None,
+    include_generated: bool = False,
 ) -> list[dict]:
     """Search a `.specpack` using an index file, embedded index, or temporary index."""
     pack = Path(pack_path).expanduser().resolve()
     if index_path is not None:
-        return search_index(index_path, query, top_k=top_k, language=language)
+        return search_index(index_path, query, top_k=top_k, language=language, include_generated=include_generated)
 
     embedded = _load_embedded_pack_index(pack, passphrase=passphrase)
     if embedded is not None:
-        return search_index(embedded, query, top_k=top_k, language=language)
+        return search_index(embedded, query, top_k=top_k, language=language, include_generated=include_generated)
 
     if not build_if_missing:
         raise FileNotFoundError(f"no embedded {PACK_INDEX_NAME} in {pack}")
 
     built = build_pack_index(pack, passphrase=passphrase)
-    return search_index(built["index"], query, top_k=top_k, language=language)
+    return search_index(built["index"], query, top_k=top_k, language=language, include_generated=include_generated)
 
 
 def dump_results(results: list[dict]) -> str:

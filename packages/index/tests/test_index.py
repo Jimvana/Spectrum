@@ -23,3 +23,20 @@ def test_build_embedded_pack_index_and_search(tmp_path: Path) -> None:
     assert results
     assert results[0]["path"].endswith("auth.md.spec")
     assert results[0]["source_path"] == "auth.md"
+
+
+def test_search_pack_filters_generated_results_by_default(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    (docs / "src").mkdir(parents=True)
+    (docs / "dist").mkdir()
+    (docs / "src" / "app.md").write_text("portable specpack runtime source marker.\n", encoding="utf-8")
+    (docs / "dist" / "bundle.md").write_text("portable specpack runtime generated marker.\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(docs, pack_path, include_all=True)
+    build_pack_index(pack_path, embed=True)
+
+    default_results = search_pack(pack_path, "portable specpack runtime marker", top_k=10)
+    archive_results = search_pack(pack_path, "portable specpack runtime marker", top_k=10, include_generated=True)
+
+    assert {result["source_path"] for result in default_results} == {"src/app.md"}
+    assert {result["source_path"] for result in archive_results} == {"src/app.md", "dist/bundle.md"}

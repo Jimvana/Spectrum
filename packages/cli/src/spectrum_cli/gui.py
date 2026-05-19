@@ -20,7 +20,7 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             os.environ.setdefault("SPECTRUM_REPO_ROOT", str(bundled_runtime))
             break
 
-from spectrum_core import append_to_pack, export_distributable, inspect_pack, is_encrypted_pack, verify_pack
+from spectrum_core import append_to_pack, export_distributable, inspect_pack, is_encrypted_pack, is_generated_path, verify_pack
 from spectrum_index import build_index
 from spectrum_server.app import PackRegistry, SpectrumServer, create_handler
 
@@ -99,7 +99,7 @@ class SpectrumHubGui:
         self.pack_passphrases: dict[Path, str] = {}
         self.server: SpectrumServer | None = None
         self.server_thread: threading.Thread | None = None
-        self.status_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        self.status_queue: queue.Queue[tuple] = queue.Queue()
         self.icon_image: tk.PhotoImage | None = None
 
         self.pack_name_var = tk.StringVar(value="No specpack loaded")
@@ -108,8 +108,11 @@ class SpectrumHubGui:
         self.backend_proxy_var = tk.StringVar(value="")
         self.server_var = tk.StringVar(value="Server stopped")
         self.replace_var = tk.BooleanVar(value=False)
+        self.include_generated_var = tk.BooleanVar(value=False)
+        self.rebuild_index_var = tk.BooleanVar(value=True)
         self.encrypt_var = tk.BooleanVar(value=False)
         self.append_status_var = tk.StringVar(value="Drop documents here, then confirm append.")
+        self.append_progress_var = tk.DoubleVar(value=0)
 
         self._build()
         self._poll_status_queue()
@@ -168,11 +171,13 @@ class SpectrumHubGui:
 
         top = ttk.Frame(append)
         top.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        top.columnconfigure(4, weight=1)
+        top.columnconfigure(6, weight=1)
         ttk.Button(top, text="Add Files", command=self.add_files).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(top, text="Add Folder", command=self.add_folder).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(top, text="Clear", command=self.clear_pending).grid(row=0, column=2, padx=(0, 8))
         ttk.Checkbutton(top, text="Replace existing paths", variable=self.replace_var).grid(row=0, column=3, padx=(0, 8))
+        ttk.Checkbutton(top, text="Include generated/build folders", variable=self.include_generated_var).grid(row=0, column=4, padx=(0, 8))
+        ttk.Checkbutton(top, text="Rebuild index after append", variable=self.rebuild_index_var).grid(row=0, column=5, padx=(0, 8))
 
         self.pending_list = tk.Listbox(append, activestyle="none", selectmode=tk.EXTENDED)
         self.pending_list.grid(row=1, column=0, sticky="nsew")
@@ -182,12 +187,15 @@ class SpectrumHubGui:
 
         self.drop_label = ttk.Label(append, textvariable=self.append_status_var, style="Status.TLabel")
         self.drop_label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.append_progress = ttk.Progressbar(append, variable=self.append_progress_var, maximum=100, mode="determinate")
+        self.append_progress.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
         bottom = ttk.Frame(main)
         bottom.grid(row=4, column=0, sticky="ew", pady=(12, 0))
         bottom.columnconfigure(0, weight=1)
         ttk.Label(bottom, textvariable=self.append_status_var, style="Status.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(bottom, text="Confirm Append", command=self.confirm_append).grid(row=0, column=1, sticky="e")
+        ttk.Button(bottom, text="Rebuild Index", command=self.rebuild_index).grid(row=0, column=1, sticky="e", padx=(0, 8))
+        ttk.Button(bottom, text="Confirm Append", command=self.confirm_append).grid(row=0, column=2, sticky="e")
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._enable_drag_drop()
@@ -226,10 +234,20 @@ class SpectrumHubGui:
     def _poll_status_queue(self) -> None:
         try:
             while True:
-                kind, message = self.status_queue.get_nowait()
+                item = self.status_queue.get_nowait()
+                kind = item[0]
+                message = item[1] if len(item) > 1 else ""
                 if kind == "server":
                     self.server_var.set(message)
+                elif kind == "progress":
+                    self.append_progress.stop()
+                    self.append_progress.configure(mode="determinate", maximum=100)
+                    self.append_progress_var.set(float(item[1]))
+                elif kind == "busy":
+                    self.append_progress.configure(mode="indeterminate")
+                    self.append_progress.start(12)
                 else:
+                    self.append_progress.stop()
                     self.append_status_var.set(message)
         except queue.Empty:
             pass
@@ -474,6 +492,7 @@ class SpectrumHubGui:
         self.pending_paths.clear()
         self.pending_list.delete(0, tk.END)
         self.append_status_var.set("Staged list cleared.")
+        self.append_progress_var.set(0)
 
     def confirm_append(self) -> None:
         pack = self._require_pack()
@@ -487,20 +506,83 @@ class SpectrumHubGui:
             return
         paths = list(self.pending_paths)
         replace = self.replace_var.get()
+        include_generated = self.include_generated_var.get()
+        rebuild_index = self.rebuild_index_var.get()
+        estimate = self._estimate_append(paths, include_generated=include_generated)
+        large_append = estimate["files"] > 1000 or estimate["bytes"] > 250 * 1024 * 1024
+        if large_append and rebuild_index:
+            rebuild_index = False
+            self.append_status_var.set(
+                f"Large append detected ({estimate['files']} files, {format_bytes(estimate['bytes'])}); index rebuild deferred."
+            )
         passphrase = self._passphrase_for_pack(pack)
         if is_encrypted_pack(pack) and passphrase is None:
             return
-        threading.Thread(target=self._append_worker, args=(pack, paths, replace, passphrase), daemon=True).start()
+        threading.Thread(
+            target=self._append_worker,
+            args=(pack, paths, replace, passphrase, include_generated, rebuild_index),
+            daemon=True,
+        ).start()
 
-    def _append_worker(self, pack: Path, paths: list[Path], replace: bool, passphrase: str | None) -> None:
+    def _estimate_append(self, paths: list[Path], *, include_generated: bool) -> dict[str, int]:
+        files = 0
+        total_bytes = 0
+        for path in paths:
+            if path.is_file():
+                files += 1
+                try:
+                    total_bytes += path.stat().st_size
+                except OSError:
+                    pass
+                continue
+            for root, dirnames, filenames in os.walk(path):
+                root_path = Path(root)
+                if not include_generated:
+                    dirnames[:] = [
+                        dirname
+                        for dirname in dirnames
+                        if not is_generated_path((root_path / dirname).relative_to(path))
+                    ]
+                for filename in filenames:
+                    candidate = root_path / filename
+                    if candidate.suffix.lower() in {".spec", ".specpack"}:
+                        continue
+                    files += 1
+                    try:
+                        total_bytes += candidate.stat().st_size
+                    except OSError:
+                        pass
+        return {"files": files, "bytes": total_bytes}
+
+    def _append_worker(
+        self,
+        pack: Path,
+        paths: list[Path],
+        replace: bool,
+        passphrase: str | None,
+        include_generated: bool,
+        rebuild_index: bool,
+    ) -> None:
         try:
-            self.status_queue.put(("append", "Appending documents..."))
+            self.status_queue.put(("append", "Scanning and appending documents..."))
             appended = 0
             replaced = 0
-            for path in paths:
-                summary = append_to_pack(pack, path, include_all=True, replace=replace, passphrase=passphrase)
+            total = max(len(paths), 1)
+            for index, path in enumerate(paths, start=1):
+                self.status_queue.put(("append", f"Packing {path} ({index}/{total})..."))
+                summary = append_to_pack(
+                    pack,
+                    path,
+                    include_all=True,
+                    include_generated=include_generated,
+                    replace=replace,
+                    passphrase=passphrase,
+                )
                 appended += int(summary.get("appended_entries", 0))
                 replaced += int(summary.get("replaced_entries", 0))
+                self.status_queue.put(("progress", 60 * index / total))
+            self.status_queue.put(("append", "Verifying appended pack..."))
+            self.status_queue.put(("busy", "verify"))
             verify = verify_pack(pack, passphrase=passphrase).to_dict()
             if not verify.get("valid"):
                 failures = verify.get("failures") or []
@@ -509,20 +591,48 @@ class SpectrumHubGui:
                     suffix = f" and {len(failures) - 8} more" if len(failures) > 8 else ""
                     raise RuntimeError(f"Pack append completed, but verification failed: {preview}{suffix}")
                 raise RuntimeError("Pack append completed, but verification failed.")
-            index = build_index(pack, embed=True, passphrase=passphrase)
-            self.root.after(0, self._after_append_success, appended, replaced, int(index.get("documents", 0)))
+            indexed_docs = None
+            if rebuild_index:
+                self.status_queue.put(("append", "Rebuilding embedded search index..."))
+                self.status_queue.put(("busy", "index"))
+                index = build_index(pack, embed=True, passphrase=passphrase)
+                indexed_docs = int(index.get("documents", 0))
+            self.status_queue.put(("progress", 100))
+            self.root.after(0, self._after_append_success, appended, replaced, indexed_docs)
         except Exception as exc:
             self.status_queue.put(("append", f"Append failed: {exc}"))
             self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
 
-    def _after_append_success(self, appended: int, replaced: int, indexed_docs: int) -> None:
+    def _after_append_success(self, appended: int, replaced: int, indexed_docs: int | None) -> None:
         self.clear_pending()
+        self.append_progress_var.set(100)
         if self.pack_path is not None:
             self.set_pack(self.pack_path)
+        index_text = f"indexed {indexed_docs}" if indexed_docs is not None else "index rebuild deferred"
         self.append_status_var.set(
             f"Appended {appended} document{'s' if appended != 1 else ''}; "
-            f"replaced {replaced}; indexed {indexed_docs}."
+            f"replaced {replaced}; {index_text}."
         )
+
+    def rebuild_index(self) -> None:
+        pack = self._require_pack()
+        if pack is None:
+            return
+        passphrase = self._passphrase_for_pack(pack)
+        if is_encrypted_pack(pack) and passphrase is None:
+            return
+        threading.Thread(target=self._rebuild_index_worker, args=(pack, passphrase), daemon=True).start()
+
+    def _rebuild_index_worker(self, pack: Path, passphrase: str | None) -> None:
+        try:
+            self.status_queue.put(("append", "Rebuilding embedded search index..."))
+            self.status_queue.put(("busy", "index"))
+            index = build_index(pack, embed=True, passphrase=passphrase)
+            self.status_queue.put(("progress", 100))
+            self.status_queue.put(("append", f"Search index rebuilt for {int(index.get('documents', 0))} documents."))
+        except Exception as exc:
+            self.status_queue.put(("append", f"Index rebuild failed: {exc}"))
+            self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
 
     def start_server(self) -> None:
         pack = self._require_pack()

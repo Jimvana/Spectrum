@@ -17,6 +17,7 @@ from .pack import (
     inspect_pack,
     is_encrypted_pack,
     is_external_media_file,
+    is_generated_path,
     pack,
     unpack,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "inspect_spec",
     "is_encrypted_pack",
     "is_external_media_file",
+    "is_generated_path",
     "pack",
     "unpack",
     "verify_pack",

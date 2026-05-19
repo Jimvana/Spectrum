@@ -114,6 +114,23 @@ def test_pack_externalizes_media_and_model_sidecar(tmp_path: Path) -> None:
         assert all(entry.sidecar_path.startswith("project.media/blobs/") for entry in opened.external_entries)
 
 
+def test_pack_can_skip_generated_project_folders(tmp_path: Path) -> None:
+    source_dir = tmp_path / "project"
+    (source_dir / "src").mkdir(parents=True)
+    (source_dir / "dist").mkdir()
+    (source_dir / "node_modules" / "lib").mkdir(parents=True)
+    (source_dir / "src" / "app.py").write_text("print('source')\n", encoding="utf-8")
+    (source_dir / "dist" / "bundle.js").write_text("console.log('built')\n", encoding="utf-8")
+    (source_dir / "node_modules" / "lib" / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+    pack_path = tmp_path / "project.specpack"
+
+    summary = pack(source_dir, pack_path, include_all=True, include_generated=False)
+
+    assert summary["entries"] == 1
+    with SpectrumPack.open(pack_path) as opened:
+        assert [entry.source for entry in opened.entries] == ["src/app.py"]
+
+
 def test_export_distributable_creates_new_project_folder(tmp_path: Path) -> None:
     source_dir = tmp_path / "project"
     assets = source_dir / "assets"

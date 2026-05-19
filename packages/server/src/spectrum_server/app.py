@@ -6,13 +6,14 @@ import shutil
 import tempfile
 import threading
 import zipfile
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -28,6 +29,7 @@ from spectrum_core import (
     inspect_pack,
     inspect_encrypted_header,
     is_encrypted_pack,
+    is_generated_path,
     unpack,
     verify_pack,
 )
@@ -91,12 +93,94 @@ class ProxyResponse:
     headers: dict[str, str]
 
 
+class DecodedFileCache:
+    def __init__(self, *, max_entries: int = 256, max_bytes: int = 64 * 1024 * 1024) -> None:
+        self.max_entries = max_entries
+        self.max_bytes = max_bytes
+        self._raw: OrderedDict[tuple[str, int, int, str], bytes] = OrderedDict()
+        self._documents: OrderedDict[tuple[str, int, int, str], dict[str, Any]] = OrderedDict()
+        self._bytes = 0
+        self._lock = threading.RLock()
+
+    def _key(self, pack_path: Path, source_path: str) -> tuple[str, int, int, str]:
+        stat = pack_path.stat()
+        return (str(pack_path.resolve()), stat.st_mtime_ns, stat.st_size, source_path)
+
+    def get_raw(self, pack_path: Path, source_path: str) -> bytes | None:
+        key = self._key(pack_path, source_path)
+        with self._lock:
+            value = self._raw.get(key)
+            if value is None:
+                return None
+            self._raw.move_to_end(key)
+            return value
+
+    def set_raw(self, pack_path: Path, source_path: str, value: bytes) -> None:
+        key = self._key(pack_path, source_path)
+        with self._lock:
+            previous = self._raw.pop(key, None)
+            if previous is not None:
+                self._bytes -= len(previous)
+            self._raw[key] = value
+            self._bytes += len(value)
+            self._trim()
+
+    def get_document(self, pack_path: Path, source_path: str) -> dict[str, Any] | None:
+        key = self._key(pack_path, source_path)
+        with self._lock:
+            value = self._documents.get(key)
+            if value is None:
+                return None
+            self._documents.move_to_end(key)
+            return dict(value)
+
+    def set_document(self, pack_path: Path, source_path: str, value: dict[str, Any]) -> None:
+        key = self._key(pack_path, source_path)
+        with self._lock:
+            self._documents[key] = dict(value)
+            self._trim()
+
+    def invalidate(self, pack_path: Path | None = None) -> None:
+        with self._lock:
+            if pack_path is None:
+                self._raw.clear()
+                self._documents.clear()
+                self._bytes = 0
+                return
+            prefix = str(pack_path.resolve())
+            for key in list(self._raw):
+                if key[0] == prefix:
+                    self._bytes -= len(self._raw.pop(key))
+            for key in list(self._documents):
+                if key[0] == prefix:
+                    self._documents.pop(key)
+
+    def _trim(self) -> None:
+        while len(self._raw) + len(self._documents) > self.max_entries or self._bytes > self.max_bytes:
+            if self._raw:
+                _key, value = self._raw.popitem(last=False)
+                self._bytes -= len(value)
+            elif self._documents:
+                self._documents.popitem(last=False)
+            else:
+                break
+
+
+_DECODE_CACHE = DecodedFileCache()
+
+
 def _json_default(value: Any):
     if isinstance(value, Path):
         return str(value)
     if is_dataclass(value):
         return asdict(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 class ApiError(Exception):
@@ -128,6 +212,7 @@ class PackRegistry:
         self._packs[pack_id] = pack_path
         if passphrase is not None:
             self._passphrases[pack_id] = passphrase
+        _DECODE_CACHE.invalidate(pack_path)
         info = inspect_pack(pack_path, passphrase=passphrase)
         return {"id": pack_id, "path": str(pack_path), "encrypted": info.get("encrypted", False), "locked": False}
 
@@ -164,6 +249,7 @@ class PackRegistry:
     def remove(self, pack_id: str) -> dict:
         path = self.get(pack_id)
         del self._packs[pack_id]
+        _DECODE_CACHE.invalidate(path)
         return {"id": pack_id, "path": str(path), "removed": True}
 
     def list(self) -> list[dict]:
@@ -181,6 +267,10 @@ class PackRegistry:
 
 
 def _decode_document(pack_path: Path, source_path: str, *, passphrase: str | None = None) -> dict:
+    source_path = _safe_source_path(source_path)
+    cached = _DECODE_CACHE.get_document(pack_path, source_path)
+    if cached is not None:
+        return cached
     with tempfile.TemporaryDirectory(prefix="spectrum-server-doc-") as tmp_name:
         tmp = Path(tmp_name)
         output = tmp / "document"
@@ -190,7 +280,7 @@ def _decode_document(pack_path: Path, source_path: str, *, passphrase: str | Non
                 raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {source_path}")
         result = decode_member(pack_path, source_path, output, passphrase=passphrase)
         data = output.read_bytes()
-        return {
+        document = {
             "path": entry.source,
             "id": entry.source_id,
             "metadata": entry.metadata or {},
@@ -199,6 +289,9 @@ def _decode_document(pack_path: Path, source_path: str, *, passphrase: str | Non
             "checksum_ok": result.checksum_ok,
             "length_ok": result.length_ok,
         }
+        _DECODE_CACHE.set_raw(pack_path, source_path, data)
+        _DECODE_CACHE.set_document(pack_path, source_path, document)
+        return document
 
 
 def _decode_json_document(pack_path: Path, candidates: list[str], *, passphrase: str | None = None) -> dict[str, Any] | None:
@@ -304,13 +397,18 @@ def _content_type(source_path: str) -> str:
 
 def _raw_pack_file(pack_path: Path, source_path: str, *, passphrase: str | None = None) -> RawResponse | RawFileResponse:
     source = _safe_source_path(source_path)
+    cached = _DECODE_CACHE.get_raw(pack_path, source)
+    if cached is not None:
+        return RawResponse(cached, _content_type(source))
     with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
         entry = opened.find_entry(source)
         if entry is not None:
             with tempfile.TemporaryDirectory(prefix="spectrum-server-raw-") as tmp_name:
                 output = Path(tmp_name) / "raw"
                 decode_member(pack_path, source, output, passphrase=passphrase)
-                return RawResponse(output.read_bytes(), _content_type(source))
+                data = output.read_bytes()
+                _DECODE_CACHE.set_raw(pack_path, source, data)
+                return RawResponse(data, _content_type(source))
         external = next((candidate for candidate in opened.external_entries if candidate.source == source), None)
         if external is not None:
             blob = opened.external_blob_path(external)
@@ -377,6 +475,7 @@ def _upsert_pack_document(pack_path: Path, source_path: str, body: dict, *, pass
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw_bytes)
         append_summary = append_to_pack(pack_path, tmp, replace=replace, include_all=True, passphrase=passphrase)
+    _DECODE_CACHE.invalidate(pack_path)
 
     verify_report = verify_pack(pack_path, passphrase=passphrase).to_dict()
     index_summary = None
@@ -479,6 +578,7 @@ def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None =
         else:
             shutil.move(str(tmp_zip), pack_path)
 
+    _DECODE_CACHE.invalidate(pack_path)
     verify_report = verify_pack(pack_path, passphrase=passphrase).to_dict()
     index_summary = None
     if rebuild_index:
@@ -522,6 +622,79 @@ def _pack_manifest(pack_path: Path, pack_id: str, *, passphrase: str | None = No
             "source_root": opened.manifest.get("source_root"),
             "app": _pack_app_config(pack_path, passphrase=passphrase),
             "documents": documents,
+        }
+
+
+def _raw_url(pack_id: str, source_path: str) -> str:
+    return f"/packs/{quote(pack_id, safe='')}/raw/{quote(source_path, safe='')}"
+
+
+def _pack_files(
+    pack_path: Path,
+    pack_id: str,
+    *,
+    prefix: str = "",
+    limit: int = 500,
+    cursor: int = 0,
+    include_generated: bool = False,
+    passphrase: str | None = None,
+) -> dict:
+    prefix = prefix.strip("/")
+    prefix_match = f"{prefix}/" if prefix else ""
+    limit = max(1, min(limit, 2000))
+    cursor = max(0, cursor)
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        rows = []
+        for entry in opened.entries:
+            if prefix and entry.source != prefix and not entry.source.startswith(prefix_match):
+                continue
+            generated = is_generated_path(entry.source)
+            if generated and not include_generated:
+                continue
+            rows.append(
+                {
+                    "source_path": entry.source,
+                    "kind": "encoded",
+                    "generated": generated,
+                    "original_size": entry.original_size,
+                    "spec_size": entry.spec_size,
+                    "metadata": entry.metadata or {},
+                    "hydrate_url": _hydrate_url(pack_id, entry.source),
+                    "raw_url": _raw_url(pack_id, entry.source),
+                }
+            )
+        for entry in opened.external_entries:
+            if prefix and entry.source != prefix and not entry.source.startswith(prefix_match):
+                continue
+            generated = is_generated_path(entry.source)
+            if generated and not include_generated:
+                continue
+            rows.append(
+                {
+                    "source_path": entry.source,
+                    "kind": entry.kind,
+                    "generated": generated,
+                    "original_size": entry.size_bytes,
+                    "spec_size": 0,
+                    "sidecar_path": entry.sidecar_path,
+                    "sha256": entry.sha256,
+                    "raw_url": _raw_url(pack_id, entry.source),
+                }
+            )
+        rows.sort(key=lambda row: str(row["source_path"]).lower())
+        page = rows[cursor : cursor + limit]
+        next_cursor = cursor + limit if cursor + limit < len(rows) else None
+        return {
+            "id": pack_id,
+            "pack_path": str(pack_path),
+            "source_root": opened.manifest.get("source_root"),
+            "prefix": prefix,
+            "limit": limit,
+            "cursor": cursor,
+            "next_cursor": next_cursor,
+            "include_generated": include_generated,
+            "total": len(rows),
+            "files": page,
         }
 
 
@@ -1248,6 +1421,19 @@ def create_handler(registry: PackRegistry | None = None):
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "manifest" and method == "GET":
                 return _pack_manifest(registry.get(parts[1]), parts[1], passphrase=registry.passphrase(parts[1]))
 
+            if len(parts) == 3 and parts[0] == "packs" and parts[2] == "files" and method == "GET":
+                query = parse_qs(parsed.query)
+                include_generated = _truthy((query.get("include_generated") or ["false"])[0])
+                return _pack_files(
+                    registry.get(parts[1]),
+                    parts[1],
+                    prefix=str((query.get("prefix") or [""])[0]),
+                    limit=int((query.get("limit") or ["500"])[0]),
+                    cursor=int((query.get("cursor") or ["0"])[0]),
+                    include_generated=include_generated,
+                    passphrase=registry.passphrase(parts[1]),
+                )
+
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "documents" and method == "GET":
                 return {"documents": _pack_manifest(registry.get(parts[1]), parts[1], passphrase=registry.passphrase(parts[1]))["documents"]}
 
@@ -1284,6 +1470,7 @@ def create_handler(registry: PackRegistry | None = None):
                     index_path=body.get("index_path"),
                     build_if_missing=bool(body.get("build_if_missing", True)),
                     passphrase=registry.passphrase(parts[1]),
+                    include_generated=_truthy(body.get("include_generated", False)),
                 )
                 for result in results:
                     source_path = result.get("source_path")
