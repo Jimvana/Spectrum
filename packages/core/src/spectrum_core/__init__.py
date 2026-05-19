@@ -3,6 +3,7 @@
 from .pack import (
     EncryptOptions,
     EncryptedPackInfo,
+    ExternalEntry,
     InvalidPassphraseError,
     LockedPackError,
     PackEntry,
@@ -14,6 +15,7 @@ from .pack import (
     inspect_encrypted_header,
     inspect_pack,
     is_encrypted_pack,
+    is_external_media_file,
     pack,
     unpack,
 )
@@ -36,6 +38,7 @@ __all__ = [
     "DecodeResult",
     "EncryptOptions",
     "EncryptedPackInfo",
+    "ExternalEntry",
     "EncodeResult",
     "InvalidPassphraseError",
     "LockedPackError",
@@ -53,6 +56,7 @@ __all__ = [
     "inspect_pack",
     "inspect_spec",
     "is_encrypted_pack",
+    "is_external_media_file",
     "pack",
     "unpack",
     "verify_pack",

@@ -30,6 +30,16 @@ def text_request(port: int, method: str, path: str) -> tuple[int, str, str]:
     return response.status, content_type, data
 
 
+def bytes_request(port: int, method: str, path: str) -> tuple[int, str, bytes]:
+    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+    connection.request(method, path)
+    response = connection.getresponse()
+    content_type = response.getheader("content-type", "")
+    data = response.read()
+    connection.close()
+    return response.status, content_type, data
+
+
 def test_server_pack_lifecycle(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -121,6 +131,60 @@ def test_server_reads_nested_document_without_full_unpack(tmp_path: Path) -> Non
         assert status == 200
         assert document["path"] == "notes/memory.md"
         assert document["content"] == "Nested document lookup.\n"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_serves_raw_pack_files_and_app_assets(tmp_path: Path) -> None:
+    docs = tmp_path / "site"
+    public = docs / "public"
+    assets = public / "assets"
+    assets.mkdir(parents=True)
+    (public / "index.html").write_text('<script src="app.js"></script><img src="assets/logo.png">', encoding="utf-8")
+    (public / "app.js").write_text("window.siteLoaded = true;\n", encoding="utf-8")
+    png = b"\x89PNG\r\n\x1a\n" + bytes(range(32))
+    (assets / "logo.png").write_bytes(png)
+    pack_path = tmp_path / "site.specpack"
+    pack(docs, pack_path, include_all=True)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        status, content_type, html = text_request(port, "GET", "/apps/repo/")
+        assert status == 200
+        assert "text/html" in content_type
+        assert "app.js" in html
+
+        status, content_type, script = text_request(port, "GET", "/apps/repo/app.js")
+        assert status == 200
+        assert "javascript" in content_type
+        assert "siteLoaded" in script
+
+        status, content_type, root_script = text_request(port, "GET", "/app.js")
+        assert status == 200
+        assert "javascript" in content_type
+        assert "siteLoaded" in root_script
+
+        status, api_error = request(port, "GET", "/api/snapshot")
+        assert status == 404
+        assert api_error["error"] == "route not found"
+
+        status, content_type, image = bytes_request(port, "GET", "/apps/repo/assets/logo.png")
+        assert status == 200
+        assert content_type == "image/png"
+        assert image == png
+
+        status, content_type, raw_html = text_request(port, "GET", "/packs/repo/raw/public/index.html")
+        assert status == 200
+        assert "text/html" in content_type
+        assert "assets/logo.png" in raw_html
     finally:
         server.shutdown()
         server.server_close()

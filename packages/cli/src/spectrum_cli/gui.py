@@ -431,6 +431,11 @@ class SpectrumHubGui:
                 replaced += int(summary.get("replaced_entries", 0))
             verify = verify_pack(pack, passphrase=passphrase).to_dict()
             if not verify.get("valid"):
+                failures = verify.get("failures") or []
+                if failures:
+                    preview = ", ".join(str(item) for item in failures[:8])
+                    suffix = f" and {len(failures) - 8} more" if len(failures) > 8 else ""
+                    raise RuntimeError(f"Pack append completed, but verification failed: {preview}{suffix}")
                 raise RuntimeError("Pack append completed, but verification failed.")
             index = build_index(pack, embed=True, passphrase=passphrase)
             self.root.after(0, self._after_append_success, appended, replaced, int(index.get("documents", 0)))

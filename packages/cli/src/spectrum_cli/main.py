@@ -212,6 +212,38 @@ def _normalize_load_output(path: Path) -> Path:
     return path.with_suffix(".specpack")
 
 
+def _preflight_output_path(output: Path) -> None:
+    parent = output.parent if output.parent != Path("") else Path.cwd()
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PermissionError(f"cannot create output folder {parent}: {exc}") from exc
+    if not parent.is_dir():
+        raise NotADirectoryError(f"output folder is not a directory: {parent}")
+
+    probe = parent / f".spectrum-write-test-{os.getpid()}.tmp"
+    try:
+        probe.write_bytes(b"spectrum")
+    except OSError as exc:
+        raise PermissionError(f"cannot write to output folder {parent}: {exc}") from exc
+    finally:
+        try:
+            probe.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    if output.exists():
+        if output.is_dir():
+            raise IsADirectoryError(f"output path is a directory: {output}")
+        try:
+            with output.open("r+b"):
+                pass
+        except OSError as exc:
+            raise PermissionError(f"cannot replace existing specpack {output}: {exc}") from exc
+
+
 def _quote_command_arg(value: str | Path) -> str:
     text = str(value)
     if not text:
@@ -656,6 +688,7 @@ def command_project_init(args: argparse.Namespace) -> int:
     project_dir.mkdir(parents=True, exist_ok=True)
 
     output = _normalize_load_output(Path(args.output).expanduser()) if args.output else _default_project_pack_path(project_dir)
+    _preflight_output_path(output)
     name = args.name or project_dir.resolve().name
     encrypt = bool(getattr(args, "encrypt", False))
     kdf_profile = getattr(args, "kdf_profile", "interactive")

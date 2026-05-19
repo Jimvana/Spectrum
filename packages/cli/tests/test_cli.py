@@ -9,6 +9,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 from spectrum_core import is_encrypted_pack, pack
 from spectrum_cli.gui import asset_path, format_bytes, load_pack_details
 from spectrum_cli.main import command_project_init, main
@@ -264,6 +266,32 @@ def test_project_init_accepts_gui_namespace_with_encryption_passphrase(tmp_path:
     assert locked.hint == "gui test hint"
     assert unlocked.locked is False
     assert unlocked.entries >= 1
+
+
+def test_project_init_reports_unwritable_output_folder_before_pack_work(tmp_path: Path) -> None:
+    project = tmp_path / "blocked-site"
+    project.mkdir()
+    (project / "app.py").write_text("print('blocked')\n", encoding="utf-8")
+    blocked_parent = tmp_path / "not-a-folder"
+    blocked_parent.write_text("I am a file, not a directory.\n", encoding="utf-8")
+
+    with pytest.raises(PermissionError, match="cannot create output folder"):
+        command_project_init(
+            argparse.Namespace(
+                source=str(project),
+                output=str(blocked_parent / "project.specpack"),
+                name="Blocked",
+                replace_template=False,
+                no_index=True,
+                port=7777,
+                all=True,
+                language=None,
+                rle="off",
+                zlib_level=9,
+                verbose=False,
+                json=True,
+            )
+        )
 
 
 def test_cli_project_init_defaults_pack_to_spectrum_folder(tmp_path: Path, capsys) -> None:

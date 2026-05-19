@@ -73,6 +73,45 @@ def test_pack_round_trip(tmp_path: Path) -> None:
         assert opened.read_spec(opened.entries[0]).startswith(b"SPEC")
 
 
+def test_pack_externalizes_media_and_model_sidecar(tmp_path: Path) -> None:
+    source_dir = tmp_path / "project"
+    assets = source_dir / "assets"
+    models = source_dir / "models"
+    assets.mkdir(parents=True)
+    models.mkdir()
+    (source_dir / "README.md").write_text("# Mixed project\n", encoding="utf-8")
+    image_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(32))
+    model_bytes = b"GGUF" + bytes(range(64))
+    (assets / "logo.png").write_bytes(image_bytes)
+    (models / "tiny.gguf").write_bytes(model_bytes)
+    pack_path = tmp_path / "project.specpack"
+    decoded_dir = tmp_path / "decoded"
+
+    summary = pack(source_dir, pack_path, include_all=True)
+    inspected = inspect_pack(pack_path)
+    results = unpack(pack_path, decoded_dir)
+    report = verify_pack(pack_path)
+    sidecar = tmp_path / "project.media"
+    restore = json.loads((sidecar / "restore_media.json").read_text(encoding="utf-8"))
+
+    assert summary["entries"] == 1
+    assert summary["external_entries"] == 2
+    assert inspected["external_entries"] == 2
+    assert len(results) == 1
+    assert all(result.ok for result in results)
+    assert report.valid
+    assert restore["format"] == "spectrum.restore-media"
+    assert {entry["source"] for entry in restore["entries"]} == {"assets/logo.png", "models/tiny.gguf"}
+    assert (decoded_dir / "README.md").read_text(encoding="utf-8") == "# Mixed project\n"
+    assert (decoded_dir / "assets" / "logo.png").read_bytes() == image_bytes
+    assert (decoded_dir / "models" / "tiny.gguf").read_bytes() == model_bytes
+
+    with SpectrumPack.open(pack_path) as opened:
+        assert len(opened.entries) == 1
+        assert len(opened.external_entries) == 2
+        assert all(entry.sidecar_path.startswith("project.media/blobs/") for entry in opened.external_entries)
+
+
 def test_encrypted_pack_round_trip_requires_passphrase(tmp_path: Path) -> None:
     source_dir = tmp_path / "docs"
     source_dir.mkdir()
@@ -187,6 +226,33 @@ def test_append_to_pack_preserves_existing_and_adds_new_source(tmp_path: Path) -
     assert all(result.ok for result in results)
     assert (decoded_dir / "README.md").read_bytes() == b"# Demo\r\n"
     assert (decoded_dir / "agent.md").read_text(encoding="utf-8") == "SSH alias and deploy notes.\n"
+
+
+def test_append_to_pack_externalizes_media_sidecar(tmp_path: Path) -> None:
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    (source_dir / "README.md").write_text("# Demo\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(source_dir, pack_path)
+
+    append_dir = tmp_path / "append"
+    media_dir = append_dir / "media"
+    media_dir.mkdir(parents=True)
+    video_bytes = b"\x00\x00\x00\x18ftypmp42" + bytes(range(128))
+    (media_dir / "clip.mp4").write_bytes(video_bytes)
+
+    summary = append_to_pack(pack_path, append_dir, include_all=True)
+    decoded_dir = tmp_path / "decoded"
+    results = unpack(pack_path, decoded_dir)
+    report = verify_pack(pack_path)
+
+    assert summary["entries"] == 1
+    assert summary["external_entries"] == 1
+    assert summary["appended_entries"] == 1
+    assert all(result.ok for result in results)
+    assert report.valid
+    assert (tmp_path / "docs.media" / "restore_media.json").exists()
+    assert (decoded_dir / "media" / "clip.mp4").read_bytes() == video_bytes
 
 
 def test_append_to_pack_rejects_conflicts_unless_replace(tmp_path: Path) -> None:

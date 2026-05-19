@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
 import io
 import os
+import shutil
 import struct
 import tempfile
 import zipfile
@@ -40,6 +42,18 @@ SUPPORTED_EXTENSIONS = {
     ".sh", ".bash", ".zsh", ".json", ".yaml", ".yml", ".toml",
 }
 
+EXTERNAL_MEDIA_EXTENSIONS = {
+    ".3g2", ".3gp", ".aac", ".aiff", ".ape", ".apng", ".arw", ".avif",
+    ".avi", ".bmp", ".cr2", ".cr3", ".dng", ".flac", ".gif", ".heic",
+    ".heif", ".ico", ".jpeg", ".jpg", ".m4a", ".m4v", ".mkv", ".mov",
+    ".mp3", ".mp4", ".mpeg", ".mpg", ".nef", ".ogg", ".opus", ".orf",
+    ".png", ".psd", ".raf", ".raw", ".rw2", ".tif", ".tiff", ".wav",
+    ".webm", ".webp", ".wma", ".wmv",
+    ".bin", ".ckpt", ".db", ".ggml", ".gguf", ".h5", ".mdb", ".model",
+    ".npy", ".npz", ".onnx", ".pb", ".pt", ".pth", ".safetensors",
+    ".sqlite", ".sqlite3", ".tflite", ".weights",
+}
+
 
 @dataclass(frozen=True)
 class PackEntry:
@@ -49,6 +63,17 @@ class PackEntry:
     spec_size: int
     source_id: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ExternalEntry:
+    source: str
+    kind: str
+    sidecar_path: str
+    blob: str
+    sha256: str
+    size_bytes: int
+    original_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +138,14 @@ def _safe_join(root: Path, relative: str, *, field: str) -> Path:
 
 
 def _entry_to_manifest(entry: PackEntry) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in entry.__dict__.items()
+        if value is not None
+    }
+
+
+def _external_entry_to_manifest(entry: ExternalEntry) -> dict[str, Any]:
     return {
         key: value
         for key, value in entry.__dict__.items()
@@ -279,6 +312,7 @@ def _inspect_archive(path: Path, archive: zipfile.ZipFile, *, pack_size: int) ->
     manifest = _load_manifest(archive)
     members = set(archive.namelist())
     entries = [_validate_entry(entry, members) for entry in manifest.get("entries", [])]
+    external_entries = [_validate_external_entry(entry) for entry in manifest.get("external_entries", [])]
     missing = [entry.spec for entry in entries if entry.spec not in members]
     total_original = sum(entry.original_size for entry in entries)
     total_spec = sum(entry.spec_size for entry in entries)
@@ -289,8 +323,10 @@ def _inspect_archive(path: Path, archive: zipfile.ZipFile, *, pack_size: int) ->
         "dict_version": manifest.get("dict_version"),
         "source_root": manifest.get("source_root"),
         "entries": len(entries),
+        "external_entries": len(external_entries),
         "original_size": total_original,
         "spec_size": total_spec,
+        "external_size": sum(entry.size_bytes for entry in external_entries),
         "pack_size": pack_size,
         "ratio": round(pack_size / total_original, 4) if total_original else 0.0,
         "missing_entries": missing,
@@ -320,6 +356,34 @@ def _validate_entry(raw: dict, members: set[str]) -> PackEntry:
     )
 
 
+def _validate_external_entry(raw: dict) -> ExternalEntry:
+    source = str(raw.get("source", ""))
+    sidecar_path = str(raw.get("sidecar_path", "")).replace("\\", "/")
+    blob = str(raw.get("blob", "")).replace("\\", "/")
+    _safe_relative_path(source, field="source")
+    sidecar_rel = _safe_relative_path(sidecar_path, field="sidecar")
+    blob_rel = _safe_relative_path(blob, field="blob")
+    if sidecar_rel.parts[0].endswith(".specpack"):
+        raise ValueError(f"unsafe sidecar path: {sidecar_path!r}")
+    if blob_rel.parts[0] != "blobs":
+        raise ValueError(f"unsafe blob path: {blob!r}")
+    kind = str(raw.get("kind") or "")
+    if kind != "external_media":
+        raise ValueError(f"unsupported external entry kind: {kind!r}")
+    sha256 = str(raw.get("sha256") or "")
+    if len(sha256) != 64 or any(char not in "0123456789abcdef" for char in sha256.lower()):
+        raise ValueError(f"invalid external entry sha256 for {source!r}")
+    return ExternalEntry(
+        source=source,
+        kind=kind,
+        sidecar_path=sidecar_rel.as_posix(),
+        blob=blob_rel.as_posix(),
+        sha256=sha256.lower(),
+        size_bytes=int(raw.get("size_bytes", 0)),
+        original_path=str(raw.get("original_path")) if raw.get("original_path") is not None else None,
+    )
+
+
 def iter_source_files(root: str | Path, *, include_all: bool = False) -> Iterable[Path]:
     root_path = Path(root)
     if root_path.is_file():
@@ -334,6 +398,171 @@ def iter_source_files(root: str | Path, *, include_all: bool = False) -> Iterabl
             continue
         if include_all or path.suffix.lower() in SUPPORTED_EXTENSIONS:
             yield path
+
+
+def is_external_media_file(path: str | Path) -> bool:
+    return Path(path).suffix.lower() in EXTERNAL_MEDIA_EXTENSIONS
+
+
+def _split_pack_inputs(files: Iterable[Path], *, externalize_media: bool) -> tuple[list[Path], list[Path]]:
+    encodable: list[Path] = []
+    external: list[Path] = []
+    for path in files:
+        if externalize_media and is_external_media_file(path):
+            external.append(path)
+        else:
+            encodable.append(path)
+    return encodable, external
+
+
+def _sidecar_dir_for_pack(output: Path) -> Path:
+    return output.with_suffix(".media")
+
+
+def _sidecar_rel_for_pack(output: Path) -> str:
+    return _sidecar_dir_for_pack(output).name
+
+
+def _copy_external_file(source: Path, sidecar_dir: Path) -> tuple[str, str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with source.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    sha256 = digest.hexdigest()
+    suffix = source.suffix.lower()
+    blob_rel = Path("blobs") / f"{sha256}{suffix}"
+    target = sidecar_dir / blob_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        shutil.copy2(source, target)
+    _write_restore_media(sidecar_dir, [])
+    return blob_rel.as_posix(), sha256, size
+
+
+def _write_restore_media(sidecar_dir: Path, entries: list[ExternalEntry]) -> None:
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    restore_path = sidecar_dir / "restore_media.json"
+    payload = {
+        "format": "spectrum.restore-media",
+        "version": 1,
+        "entries": [_external_entry_to_manifest(entry) for entry in entries],
+    }
+    restore_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _copy_existing_external_entries(entries: list[ExternalEntry], from_pack: Path, to_pack: Path) -> list[ExternalEntry]:
+    if not entries:
+        return []
+    from_sidecar = from_pack.parent
+    to_sidecar = _sidecar_dir_for_pack(to_pack)
+    copied: list[ExternalEntry] = []
+    for entry in entries:
+        source_blob = _safe_join(from_sidecar, entry.sidecar_path, field="sidecar")
+        target_blob = to_sidecar / entry.blob
+        target_blob.parent.mkdir(parents=True, exist_ok=True)
+        if source_blob.exists() and source_blob.resolve() != target_blob.resolve():
+            shutil.copy2(source_blob, target_blob)
+        copied.append(
+            ExternalEntry(
+                source=entry.source,
+                kind=entry.kind,
+                sidecar_path=f"{to_sidecar.name}/{entry.blob}",
+                blob=entry.blob,
+                sha256=entry.sha256,
+                size_bytes=entry.size_bytes,
+                original_path=entry.original_path,
+            )
+        )
+    _write_restore_media(to_sidecar, copied)
+    return copied
+
+
+def _external_entry_from_file(file_path: Path, rel: Path, output: Path) -> ExternalEntry:
+    sidecar_dir = _sidecar_dir_for_pack(output)
+    blob, sha256, size = _copy_external_file(file_path, sidecar_dir)
+    source_name = _posix(rel)
+    entry = ExternalEntry(
+        source=source_name,
+        kind="external_media",
+        sidecar_path=f"{sidecar_dir.name}/{blob}",
+        blob=blob,
+        sha256=sha256,
+        size_bytes=size,
+        original_path=source_name,
+    )
+    return entry
+
+
+def _looks_binary(path: Path, sample_size: int = 8192) -> bool:
+    try:
+        with path.open("rb") as handle:
+            sample = handle.read(sample_size)
+    except OSError:
+        return False
+    if b"\x00" in sample:
+        return True
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _encode_verified_or_external(
+    file_path: Path,
+    rel: Path,
+    output: Path,
+    tmp: Path,
+    *,
+    source_is_file: bool,
+    language: str | int | None,
+    rle: str,
+    zlib_level: int,
+    verbose: bool,
+    externalize_media: bool,
+    metadata_by_source: dict[str, dict[str, Any]] | None = None,
+    ids_by_source: dict[str, str] | None = None,
+) -> tuple[PackEntry | None, ExternalEntry | None]:
+    source_name = _posix(rel)
+    if externalize_media and (is_external_media_file(file_path) or _looks_binary(file_path)):
+        return None, _external_entry_from_file(file_path, rel, output)
+
+    spec_rel = Path("files") / Path(str(rel) + ".spec")
+    spec_path = tmp / spec_rel
+    result = encode_file(
+        file_path,
+        spec_path,
+        language=language,
+        rle=rle,
+        zlib_level=zlib_level,
+        verbose=verbose,
+    )
+
+    verify_path = tmp / "_roundtrip" / (Path(file_path.name) if source_is_file else rel)
+    verify_path.parent.mkdir(parents=True, exist_ok=True)
+    decoded = decode_file(spec_path, verify_path, verbose=verbose)
+    if not decoded.ok or verify_path.read_bytes() != file_path.read_bytes():
+        if externalize_media:
+            try:
+                spec_path.unlink()
+            except FileNotFoundError:
+                pass
+            return None, _external_entry_from_file(file_path, rel, output)
+        raise ValueError(f"encoded file did not verify losslessly: {file_path}")
+
+    return (
+        PackEntry(
+            source=source_name,
+            spec=_posix(spec_rel),
+            original_size=result.original_size,
+            spec_size=result.spec_size,
+            source_id=(ids_by_source or {}).get(source_name),
+            metadata=(metadata_by_source or {}).get(source_name),
+        ),
+        None,
+    )
 
 
 def pack(
@@ -351,6 +580,7 @@ def pack(
     passphrase: str | None = None,
     kdf_profile: str = "interactive",
     hint: str | None = None,
+    externalize_media: bool = True,
 ) -> dict:
     """Create a `.specpack` archive from a file or folder."""
     source = Path(input_path).resolve()
@@ -359,36 +589,39 @@ def pack(
         raise FileNotFoundError(source)
 
     base = source.parent if source.is_file() else source
-    files = list(iter_source_files(source, include_all=include_all))
-    if not files:
+    files, external_files = _split_pack_inputs(iter_source_files(source, include_all=include_all), externalize_media=externalize_media)
+    if not files and not external_files:
         raise ValueError(f"no encodable files found under {source}")
 
     with tempfile.TemporaryDirectory(prefix="spectrum-core-pack-") as tmp_name:
         tmp = Path(tmp_name)
         entries: list[PackEntry] = []
+        external_entries: list[ExternalEntry] = []
         for file_path in files:
             rel = Path(file_path.name) if source.is_file() else file_path.relative_to(base)
-            spec_rel = Path("files") / Path(str(rel) + ".spec")
-            spec_path = tmp / spec_rel
-            result = encode_file(
+            entry, external_entry = _encode_verified_or_external(
                 file_path,
-                spec_path,
+                rel,
+                output,
+                tmp,
+                source_is_file=source.is_file(),
                 language=language,
                 rle=rle,
                 zlib_level=zlib_level,
                 verbose=verbose,
+                externalize_media=externalize_media,
+                metadata_by_source=metadata_by_source,
+                ids_by_source=ids_by_source,
             )
-            source_name = _posix(rel)
-            entries.append(
-                PackEntry(
-                    source=source_name,
-                    spec=_posix(spec_rel),
-                    original_size=result.original_size,
-                    spec_size=result.spec_size,
-                    source_id=(ids_by_source or {}).get(source_name),
-                    metadata=(metadata_by_source or {}).get(source_name),
-                )
-            )
+            if entry is not None:
+                entries.append(entry)
+            if external_entry is not None:
+                external_entries.append(external_entry)
+        for file_path in external_files:
+            rel = Path(file_path.name) if source.is_file() else file_path.relative_to(base)
+            external_entries.append(_external_entry_from_file(file_path, rel, output))
+        if external_entries:
+            _write_restore_media(_sidecar_dir_for_pack(output), external_entries)
 
         manifest = {
             "format": PACK_FORMAT,
@@ -396,6 +629,7 @@ def pack(
             "dict_version": D.DICT_VERSION,
             "source_root": source.name,
             "entries": [_entry_to_manifest(entry) for entry in entries],
+            "external_entries": [_external_entry_to_manifest(entry) for entry in external_entries],
         }
 
         tmp_zip = tmp / output.name
@@ -432,6 +666,7 @@ def append_to_pack(
     passphrase: str | None = None,
     kdf_profile: str | None = None,
     hint: str | None = None,
+    externalize_media: bool = True,
 ) -> dict:
     """Append source files to an existing `.specpack`.
 
@@ -452,8 +687,8 @@ def append_to_pack(
         raise FileNotFoundError(source)
 
     base = source.parent if source.is_file() else source
-    files = list(iter_source_files(source, include_all=include_all))
-    if not files:
+    files, external_files = _split_pack_inputs(iter_source_files(source, include_all=include_all), externalize_media=externalize_media)
+    if not files and not external_files:
         raise ValueError(f"no encodable files found under {source}")
 
     original_encrypted = is_encrypted_pack(pack_file)
@@ -461,56 +696,69 @@ def append_to_pack(
     with SpectrumPack.open(pack_file, passphrase=passphrase) as opened:
         manifest = dict(opened.manifest)
         existing_entries = list(opened.entries)
+        existing_external_entries = list(opened.external_entries)
         existing_members = set(opened._zip.namelist())
 
     existing_by_source = {entry.source: entry for entry in existing_entries}
+    existing_external_by_source = {entry.source: entry for entry in existing_external_entries}
     new_sources: set[str] = set()
     encoded_entries: list[PackEntry] = []
+    new_external_entries: list[ExternalEntry] = []
 
     with tempfile.TemporaryDirectory(prefix="spectrum-core-append-") as tmp_name:
         tmp = Path(tmp_name)
-        for file_path in files:
+        for file_path in [*files, *external_files]:
             rel = Path(file_path.name) if source.is_file() else file_path.relative_to(base)
             source_name = _posix(rel)
             if source_name in new_sources:
                 raise ValueError(f"duplicate appended source path: {source_name}")
-            if source_name in existing_by_source and not replace:
+            if (source_name in existing_by_source or source_name in existing_external_by_source) and not replace:
                 raise ValueError(f"source already exists in pack: {source_name}")
             new_sources.add(source_name)
+            if file_path in external_files:
+                new_external_entries.append(_external_entry_from_file(file_path, rel, output))
+                continue
 
-            spec_rel = Path("files") / Path(str(rel) + ".spec")
-            spec_name = _posix(spec_rel)
-            if spec_name in existing_members and source_name not in existing_by_source and not replace:
-                raise ValueError(f"spec member already exists in pack: {spec_name}")
-
-            spec_path = tmp / spec_rel
-            result = encode_file(
+            entry, external_entry = _encode_verified_or_external(
                 file_path,
-                spec_path,
+                rel,
+                output,
+                tmp,
+                source_is_file=source.is_file(),
                 language=language,
                 rle=rle,
                 zlib_level=zlib_level,
                 verbose=verbose,
+                externalize_media=externalize_media,
+                metadata_by_source=metadata_by_source,
+                ids_by_source=ids_by_source,
             )
-            encoded_entries.append(
-                PackEntry(
-                    source=source_name,
-                    spec=spec_name,
-                    original_size=result.original_size,
-                    spec_size=result.spec_size,
-                    source_id=(ids_by_source or {}).get(source_name),
-                    metadata=(metadata_by_source or {}).get(source_name),
-                )
-            )
+            if entry is not None:
+                if entry.spec in existing_members and source_name not in existing_by_source and not replace:
+                    raise ValueError(f"spec member already exists in pack: {entry.spec}")
+                encoded_entries.append(entry)
+            if external_entry is not None:
+                new_external_entries.append(external_entry)
 
         removed_specs = {
             existing_by_source[source_name].spec
             for source_name in new_sources
             if source_name in existing_by_source
         }
+        removed_external = {
+            source_name
+            for source_name in new_sources
+            if source_name in existing_external_by_source
+        }
         kept_entries = [entry for entry in existing_entries if entry.source not in new_sources]
+        kept_external_entries = [entry for entry in existing_external_entries if entry.source not in new_sources]
+        kept_external_entries = _copy_existing_external_entries(kept_external_entries, pack_file, output)
         merged_entries = [*kept_entries, *encoded_entries]
+        merged_external_entries = [*kept_external_entries, *new_external_entries]
         manifest["entries"] = [_entry_to_manifest(entry) for entry in merged_entries]
+        manifest["external_entries"] = [_external_entry_to_manifest(entry) for entry in merged_external_entries]
+        if merged_external_entries:
+            _write_restore_media(_sidecar_dir_for_pack(output), merged_external_entries)
 
         tmp_zip = tmp / output.name
         with SpectrumPack.open(pack_file, passphrase=passphrase) as opened, zipfile.ZipFile(
@@ -554,8 +802,12 @@ def append_to_pack(
             )
 
     summary = inspect_pack(output, passphrase=passphrase if original_encrypted else None)
-    summary["appended_entries"] = len(encoded_entries)
-    summary["replaced_entries"] = len(removed_specs)
+    summary["appended_entries"] = len(encoded_entries) + len(new_external_entries)
+    summary["appended_encoded_entries"] = len(encoded_entries)
+    summary["appended_external_entries"] = len(new_external_entries)
+    summary["replaced_entries"] = len(removed_specs) + len(removed_external)
+    summary["replaced_encoded_entries"] = len(removed_specs)
+    summary["replaced_external_entries"] = len(removed_external)
     summary["dropped_embedded_index"] = PACK_INDEX_NAME in existing_members
     return summary
 
@@ -582,6 +834,7 @@ def unpack(
                         verbose=verbose,
                     )
                 )
+            opened.restore_external_files(target)
     return results
 
 
@@ -637,6 +890,7 @@ class SpectrumPack:
         self.manifest = manifest
         members = set(archive.namelist())
         self.entries = [_validate_entry(entry, members) for entry in manifest.get("entries", [])]
+        self.external_entries = [_validate_external_entry(entry) for entry in manifest.get("external_entries", [])]
 
     @classmethod
     def open(cls, path: str | Path, *, passphrase: str | None = None) -> "SpectrumPack":
@@ -683,3 +937,29 @@ class SpectrumPack:
         for entry in self.entries:
             paths.append(self.extract_spec(entry, output_dir))
         return paths
+
+    def external_blob_path(self, entry: ExternalEntry) -> Path:
+        return _safe_join(self.path.parent, entry.sidecar_path, field="sidecar")
+
+    def restore_external_files(self, output_dir: str | Path) -> list[Path]:
+        restored: list[Path] = []
+        root = Path(output_dir)
+        for entry in self.external_entries:
+            blob = self.external_blob_path(entry)
+            if not blob.exists():
+                raise FileNotFoundError(f"external media sidecar missing: {blob}")
+            size = 0
+            digest = hashlib.sha256()
+            target = _safe_join(root, entry.source, field="source")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with blob.open("rb") as source_handle, target.open("wb") as target_handle:
+                for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                    size += len(chunk)
+                    digest.update(chunk)
+                    target_handle.write(chunk)
+            if size != entry.size_bytes:
+                raise ValueError(f"external media size mismatch: {entry.source}")
+            if digest.hexdigest() != entry.sha256:
+                raise ValueError(f"external media checksum mismatch: {entry.source}")
+            restored.append(target)
+        return restored

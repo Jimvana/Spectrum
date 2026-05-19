@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import shutil
 import tempfile
 import threading
@@ -63,6 +64,20 @@ PROJECT_FIELD_NAMES = {
 @dataclass(frozen=True)
 class HtmlResponse:
     body: str
+    status: HTTPStatus = HTTPStatus.OK
+
+
+@dataclass(frozen=True)
+class RawResponse:
+    body: bytes
+    content_type: str
+    status: HTTPStatus = HTTPStatus.OK
+
+
+@dataclass(frozen=True)
+class RawFileResponse:
+    path: Path
+    content_type: str
     status: HTTPStatus = HTTPStatus.OK
 
 
@@ -153,6 +168,60 @@ def _decode_document(pack_path: Path, source_path: str, *, passphrase: str | Non
             "checksum_ok": result.checksum_ok,
             "length_ok": result.length_ok,
         }
+
+
+def _content_type(source_path: str) -> str:
+    guessed, _encoding = mimetypes.guess_type(source_path)
+    if guessed:
+        if guessed.startswith("text/") or guessed in {"application/javascript", "application/json"}:
+            return f"{guessed}; charset=utf-8"
+        return guessed
+    return "application/octet-stream"
+
+
+def _raw_pack_file(pack_path: Path, source_path: str, *, passphrase: str | None = None) -> RawResponse | RawFileResponse:
+    source = _safe_source_path(source_path)
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        entry = opened.find_entry(source)
+        if entry is not None:
+            with tempfile.TemporaryDirectory(prefix="spectrum-server-raw-") as tmp_name:
+                output = Path(tmp_name) / "raw"
+                decode_member(pack_path, source, output, passphrase=passphrase)
+                return RawResponse(output.read_bytes(), _content_type(source))
+        external = next((candidate for candidate in opened.external_entries if candidate.source == source), None)
+        if external is not None:
+            blob = opened.external_blob_path(external)
+            if not blob.exists():
+                raise ApiError(HTTPStatus.NOT_FOUND, f"external media sidecar missing: {source}")
+            return RawFileResponse(blob, _content_type(source))
+    raise ApiError(HTTPStatus.NOT_FOUND, f"raw file not found: {source}")
+
+
+def _app_source_candidates(path: str) -> list[str]:
+    source = path.strip("/")
+    if not source:
+        return ["public/index.html", "index.html"]
+    if source.endswith("/"):
+        source = f"{source}index.html"
+    candidates = []
+    if not source.startswith("public/"):
+        candidates.append(f"public/{source}")
+    candidates.append(source)
+    if "." not in Path(source).name:
+        candidates.extend(["public/index.html", "index.html"])
+    return candidates
+
+
+def _raw_app_file(pack_path: Path, app_path: str, *, passphrase: str | None = None) -> RawResponse | RawFileResponse:
+    last_error: ApiError | None = None
+    for source in _app_source_candidates(app_path):
+        try:
+            return _raw_pack_file(pack_path, source, passphrase=passphrase)
+        except ApiError as exc:
+            if exc.status != HTTPStatus.NOT_FOUND:
+                raise
+            last_error = exc
+    raise last_error or ApiError(HTTPStatus.NOT_FOUND, f"app file not found: {app_path}")
 
 
 def _safe_source_path(value: str) -> str:
@@ -961,6 +1030,10 @@ def create_handler(registry: PackRegistry | None = None):
                     payload = self._route(method)
                 if isinstance(payload, HtmlResponse):
                     self._send_html(payload.body, status=payload.status)
+                elif isinstance(payload, RawResponse):
+                    self._send_raw(payload.body, payload.content_type, status=payload.status)
+                elif isinstance(payload, RawFileResponse):
+                    self._send_file(payload.path, payload.content_type, status=payload.status)
                 else:
                     self._send_json(payload)
             except ApiError as exc:
@@ -981,6 +1054,11 @@ def create_handler(registry: PackRegistry | None = None):
 
             if method == "GET" and parts == ["health"]:
                 return {"status": "ok", "version": SERVER_VERSION}
+
+            if len(parts) >= 2 and parts[0] == "apps" and method == "GET":
+                pack_id = parts[1]
+                app_path = "/".join(parts[2:])
+                return _raw_app_file(registry.get(pack_id), app_path, passphrase=registry.passphrase(pack_id))
 
             if method == "POST" and parts == ["shutdown"]:
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -1075,10 +1153,22 @@ def create_handler(registry: PackRegistry | None = None):
                 document_path = "/".join(parts[3:])
                 return _decode_document(registry.get(pack_id), document_path, passphrase=registry.passphrase(pack_id))
 
+            if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "raw" and method == "GET":
+                pack_id = parts[1]
+                raw_path = "/".join(parts[3:])
+                return _raw_pack_file(registry.get(pack_id), raw_path, passphrase=registry.passphrase(pack_id))
+
             if len(parts) >= 4 and parts[0] == "packs" and parts[2] == "documents" and method == "DELETE":
                 pack_id = parts[1]
                 document_path = "/".join(parts[3:])
                 return _delete_pack_document(registry.get(pack_id), document_path, self._read_json(), passphrase=registry.passphrase(pack_id))
+
+            if method == "GET" and parts and parts[0] != "api":
+                try:
+                    return _raw_app_file(registry.get("repo"), "/".join(parts), passphrase=registry.passphrase("repo"))
+                except ApiError as exc:
+                    if exc.status != HTTPStatus.NOT_FOUND:
+                        raise
 
             raise ApiError(HTTPStatus.NOT_FOUND, "route not found")
 
@@ -1103,6 +1193,23 @@ def create_handler(registry: PackRegistry | None = None):
             self.send_header("content-length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_raw(self, body: bytes, content_type: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+            self.send_response(status.value)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            self.send_header("cache-control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_file(self, path: Path, content_type: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+            self.send_response(status.value)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(path.stat().st_size))
+            self.send_header("cache-control", "no-store")
+            self.end_headers()
+            with path.open("rb") as handle:
+                shutil.copyfileobj(handle, self.wfile, length=1024 * 1024)
 
     return SpectrumHandler
 
