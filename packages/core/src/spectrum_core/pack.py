@@ -547,19 +547,28 @@ def _encode_verified_or_external(
 
     spec_rel = Path("files") / Path(str(rel) + ".spec")
     spec_path = tmp / spec_rel
-    result = encode_file(
-        file_path,
-        spec_path,
-        language=language,
-        rle=rle,
-        zlib_level=zlib_level,
-        verbose=verbose,
-    )
+    try:
+        result = encode_file(
+            file_path,
+            spec_path,
+            language=language,
+            rle=rle,
+            zlib_level=zlib_level,
+            verbose=verbose,
+        )
+    except Exception:
+        if externalize_media:
+            return None, _external_entry_from_file(file_path, rel, output)
+        raise
 
     verify_path = tmp / "_roundtrip" / (Path(file_path.name) if source_is_file else rel)
     verify_path.parent.mkdir(parents=True, exist_ok=True)
-    decoded = decode_file(spec_path, verify_path, verbose=verbose)
-    if not decoded.ok or verify_path.read_bytes() != file_path.read_bytes():
+    try:
+        decoded = decode_file(spec_path, verify_path, verbose=verbose)
+        verified = decoded.ok and verify_path.read_bytes() == file_path.read_bytes()
+    except Exception:
+        verified = False
+    if not verified:
         if externalize_media:
             try:
                 spec_path.unlink()

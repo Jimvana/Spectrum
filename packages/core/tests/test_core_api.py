@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import zipfile
 from pathlib import Path
 
@@ -137,6 +138,32 @@ def test_export_distributable_creates_new_project_folder(tmp_path: Path) -> None
     assert first["external_entries"] == 1
     assert (first_dir / "README.md").read_text(encoding="utf-8") == "# Export\n"
     assert (first_dir / "assets" / "logo.png").read_bytes() == image_bytes
+
+
+def test_pack_externalizes_files_that_fail_encoding(tmp_path: Path, monkeypatch) -> None:
+    source_dir = tmp_path / "project"
+    source_dir.mkdir()
+    (source_dir / "broken.py").write_text("def ok():\n  return 1\n return 2\n", encoding="utf-8")
+    pack_path = tmp_path / "project.specpack"
+
+    pack_module = importlib.import_module("spectrum_core.pack")
+
+    original_encode_file = pack_module.encode_file
+
+    def raising_encode_file(source, output, **kwargs):
+        if str(source).endswith("broken.py"):
+            raise IndentationError("unindent does not match any outer indentation level (<string>, line 177)")
+        return original_encode_file(source, output, **kwargs)
+
+    monkeypatch.setattr(pack_module, "encode_file", raising_encode_file)
+
+    summary = pack(source_dir, pack_path, include_all=True)
+
+    assert summary["entries"] == 0
+    assert summary["external_entries"] == 1
+    decoded_dir = tmp_path / "decoded"
+    unpack(pack_path, decoded_dir)
+    assert (decoded_dir / "broken.py").read_text(encoding="utf-8") == "def ok():\n  return 1\n return 2\n"
 
 
 def test_encrypted_pack_round_trip_requires_passphrase(tmp_path: Path) -> None:
