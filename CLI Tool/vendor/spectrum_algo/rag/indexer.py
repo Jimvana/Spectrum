@@ -51,7 +51,7 @@ HEADER_SIZE = 16
 FLAG_RLE    = 0b0000_0001
 
 INDEX_MAGIC = b"SRB1"
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 RETRIEVAL_PROFILE = "universal_v1"
 
 LANG_NAMES = {0: "Python", 1: "HTML", 2: "JS", 3: "CSS", 4: "Text"}
@@ -330,6 +330,12 @@ def _save_binary_index(index: dict, path: Path) -> None:
         for doc in documents:
             path_bytes = str(doc["path"]).encode("utf-8")
             name_bytes = str(doc["name"]).encode("utf-8")
+            extra_doc = {
+                key: value
+                for key, value in doc.items()
+                if key not in {"id", "path", "name", "language_id", "orig_length", "token_count", "freq"}
+            }
+            extra_doc_bytes = json.dumps(extra_doc, separators=(",", ":")).encode("utf-8")
             freq = [(int(tid), int(count)) for tid, count in doc["freq"]]
 
             f.write(struct.pack(
@@ -346,6 +352,9 @@ def _save_binary_index(index: dict, path: Path) -> None:
             f.write(name_bytes)
             for tid, count in freq:
                 f.write(struct.pack("<II", tid, count))
+            if INDEX_VERSION >= 3:
+                f.write(struct.pack("<I", len(extra_doc_bytes)))
+                f.write(extra_doc_bytes)
 
 
 def save_index(index: dict, path: str | Path) -> None:
@@ -377,7 +386,7 @@ def _load_binary_index(path: Path) -> dict:
         "<IIIdI", raw, offset
     )
     offset += struct.calcsize("<IIIdI")
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise ValueError(f"Unsupported Spectrum binary RAG index version: {version}")
 
     built_at = raw[offset:offset + built_at_len].decode("utf-8")
@@ -417,7 +426,15 @@ def _load_binary_index(path: Path) -> dict:
             offset += freq_row.size
             freq.append([tid, count])
 
-        documents.append({
+        extra_doc = {}
+        if version >= 3:
+            extra_len, = struct.unpack_from("<I", raw, offset)
+            offset += 4
+            if extra_len:
+                extra_doc = json.loads(raw[offset:offset + extra_len].decode("utf-8"))
+            offset += extra_len
+
+        document = {
             "id": doc_id,
             "path": doc_path,
             "name": name,
@@ -425,7 +442,9 @@ def _load_binary_index(path: Path) -> dict:
             "orig_length": orig_length,
             "token_count": token_count,
             "freq": freq,
-        })
+        }
+        document.update(extra_doc)
+        documents.append(document)
 
     meta = {
         "total_docs": total_docs,

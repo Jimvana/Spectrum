@@ -5,7 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .pack import SpectrumPack
+from .pack import ExternalEntry, PackEntry, SpectrumPack
 from .spec import DecodeResult, decode_file
 
 
@@ -81,6 +81,71 @@ def verify_pack(pack_path: str | Path, *, passphrase: str | None = None) -> Vali
         decode_passed=report.decode_passed,
         decode_failed=report.decode_failed + len(external_failures),
         failures=failures,
+    )
+
+
+def _verify_external_entry(opened: SpectrumPack, entry: ExternalEntry) -> str | None:
+    blob = opened.external_blob_path(entry)
+    if not blob.exists():
+        return f"{entry.source}: missing sidecar"
+    size = 0
+    digest = hashlib.sha256()
+    with blob.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    if size != entry.size_bytes:
+        return f"{entry.source}: size mismatch"
+    if digest.hexdigest() != entry.sha256:
+        return f"{entry.source}: checksum mismatch"
+    return None
+
+
+def verify_pack_sources(
+    pack_path: str | Path,
+    source_paths: list[str] | tuple[str, ...] | set[str],
+    *,
+    passphrase: str | None = None,
+) -> ValidationReport:
+    """Verify only selected pack sources.
+
+    Encoded entries are decoded and external entries have their sidecar blob
+    size/checksum checked. This is intended for append/upsert workflows that
+    already know which sources changed.
+    """
+    wanted = {str(path).replace("\\", "/") for path in source_paths}
+    results: list[tuple[str, DecodeResult]] = []
+    failures: list[str] = []
+    external_checked = 0
+    with tempfile.TemporaryDirectory(prefix="spectrum-core-verify-changed-") as tmp_name:
+        tmp = Path(tmp_name)
+        with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+            encoded_by_source: dict[str, PackEntry] = {entry.source: entry for entry in opened.entries}
+            external_by_source: dict[str, ExternalEntry] = {entry.source: entry for entry in opened.external_entries}
+            for source in sorted(wanted):
+                entry = encoded_by_source.get(source)
+                if entry is not None:
+                    spec_path = opened.extract_spec(entry, tmp / "pack")
+                    result = decode_file(spec_path, tmp / "decoded" / entry.source)
+                    results.append((entry.source, result))
+                    continue
+                external = external_by_source.get(source)
+                if external is not None:
+                    external_checked += 1
+                    failure = _verify_external_entry(opened, external)
+                    if failure is not None:
+                        failures.append(failure)
+                    continue
+                failures.append(f"{source}: missing from pack")
+
+    report = _report(results)
+    all_failures = (*report.failures, *failures)
+    return ValidationReport(
+        valid=not all_failures,
+        chunks_checked=report.chunks_checked + external_checked,
+        decode_passed=report.decode_passed,
+        decode_failed=report.decode_failed + len(failures),
+        failures=all_failures,
     )
 
 

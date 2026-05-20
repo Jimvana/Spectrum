@@ -32,6 +32,7 @@ from .spec import (
 from .validation import (
     ValidationReport,
     verify_pack,
+    verify_pack_sources,
     verify_path,
     verify_spec,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "pack",
     "unpack",
     "verify_pack",
+    "verify_pack_sources",
     "verify_path",
     "verify_spec",
 ]

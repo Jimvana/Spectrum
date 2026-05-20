@@ -19,6 +19,7 @@ PYTHONPATH_ENTRIES = [
 ASSETS = ROOT / "packages/cli/src/spectrum_cli/assets"
 RUNTIME = ROOT / "CLI Tool/vendor/spectrum_algo"
 ENTRYPOINT = ROOT / "packages/cli/src/spectrum_cli/gui.py"
+MACOS_BUNDLE_IDENTIFIER = "co.uk.agegatepro.spectrumhub"
 
 
 def host_platform() -> str:
@@ -79,6 +80,30 @@ def spectrum_hub_running() -> bool:
     return "SpectrumHub.exe" in result.stdout
 
 
+def macos_icon_path(work_dir: Path) -> Path | None:
+    existing = ASSETS / "spec-icon.icns"
+    if existing.exists():
+        return existing
+
+    source = ASSETS / "spec-icon.png"
+    if not source.exists():
+        return None
+
+    generated = work_dir / "spec-icon.icns"
+    if generated.exists():
+        return generated
+
+    try:
+        from PIL import Image
+
+        work_dir.mkdir(parents=True, exist_ok=True)
+        image = Image.open(source).convert("RGBA")
+        image.save(generated, format="ICNS", sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512)])
+    except Exception:
+        return None
+    return generated if generated.exists() else None
+
+
 def build_command(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
     command = [
         sys.executable,
@@ -106,9 +131,10 @@ def build_command(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
         if args.uac_admin:
             command.append("--uac-admin")
     elif args.platform == "macos":
-        # PyInstaller expects .icns for a polished app icon. Build the .app
-        # first; add .icns generation when release signing/notarization lands.
-        pass
+        icon = macos_icon_path(args.work)
+        if icon is not None:
+            command.extend(["--icon", str(icon)])
+        command.extend(["--osx-bundle-identifier", MACOS_BUNDLE_IDENTIFIER])
 
     for path in PYTHONPATH_ENTRIES:
         command.extend(["--paths", str(path)])

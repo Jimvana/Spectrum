@@ -209,15 +209,34 @@ has an Inno Setup installer target:
 npm run build:hub-gui-installer
 ```
 
-The macOS target currently produces `dist/SpectrumHub.app`. The Linux target
-produces a portable `dist/SpectrumHub/` folder. DMG, signing/notarization,
-AppImage, and `.deb` packaging are intentionally separate release steps.
+The macOS target uses the same Spectrum Hub GUI flow as Windows: create/open
+packs, append files and folders, unlock encrypted packs, export/open the files
+view, rebuild indexes, serve the dashboard, and preview packed apps. It
+produces `dist/SpectrumHub.app` with bundled Spectrum modules, the codec
+runtime, GUI assets, optional drag/drop support, and a generated `.icns` app
+icon when Pillow is available. On macOS you can install GUI build dependencies
+and build the app with:
+
+```bash
+npm run deps:hub-gui:macos
+npm run build:hub-gui:macos
+```
+
+The Linux target produces a portable `dist/SpectrumHub/` folder. DMG,
+signing/notarization, AppImage, and `.deb` packaging are intentionally separate
+release steps.
 
 The package name is `spectrumstore`, and it exposes both `spectrum` and
 `spectrumstore` commands. It requires Node.js 18+ and Python 3.10+ on `PATH`;
 the preview npm package bundles the Python Spectrum CLI, index layer, core API,
 and current codec runtime so users do not need to set `PYTHONPATH` or
 `SPECTRUM_REPO_ROOT` manually.
+
+Embedded `.specpack` index rebuilds support incremental reuse. When an existing
+embedded index has per-source fingerprints, Spectrum re-tokenizes only added or
+changed encoded documents, then rewrites the global BM25 metadata and inverted
+index. Older embedded indexes automatically fall back to one full rebuild so
+the new fingerprints can be stored.
 
 ## Spectrum Benchmark HUD
 
@@ -570,4 +589,3 @@ Recent local code-search signal:
 All timings are milliseconds. These runs used small generated-query code
 benchmarks, so treat them as a profile tuning signal rather than a large-scale
 production claim.
-

@@ -61,17 +61,27 @@ servers. If none respond, it prints `No spectrum servers operating`. Use
 `--ports 7777,7778` when you want to check an explicit list.
 
 `spectrum hub --gui` opens the desktop Spectrum Hub. It can create or open a
-`.specpack`, show the loaded pack name and size, start a local server without a
-terminal window, open the dashboard, and stage dropped documents for a confirmed
-append. Build the Windows app with:
+`.specpack`, unlock encrypted packs, append files and folders, export/open a
+restored files view, rebuild embedded indexes, start a local server without a
+terminal window, open the dashboard, preview packed apps, and optionally proxy
+backend API routes. Build the app for the current platform with:
 
 ```powershell
 npm run deps:hub-gui
 npm run build:hub-gui
 ```
 
-The build output is `dist/SpectrumHub/SpectrumHub.exe`. Installing
-`tkinterdnd2` before the build enables native drag and drop in the packaged app.
+Windows output is `dist/SpectrumHub/SpectrumHub.exe`; macOS output is
+`dist/SpectrumHub.app`. Installing `tkinterdnd2` before the build enables native
+drag and drop in the packaged app.
+
+macOS has a dedicated wrapper that uses the same GUI/runtime flow as Windows
+and generates a bundle icon when Pillow is available:
+
+```bash
+npm run deps:hub-gui:macos
+npm run build:hub-gui:macos
+```
 
 Build the Windows installer with Inno Setup 6:
 
@@ -91,7 +101,34 @@ a UAC prompt before opening Spectrum Hub.
 
 If an appended source path already exists, `append` fails unless `--replace` is
 passed. Appending removes embedded `index.bin` so searches do not silently use a
-stale index; rebuild it with `spectrum index ./docs.specpack --embed`.
+stale index; rebuild it with `spectrum index ./docs.specpack --embed
+--incremental`. Incremental rebuilds reuse unchanged documents from the
+embedded index and re-tokenize only added or changed encoded sources. The first
+rebuild after upgrading from an older index falls back to a full rebuild so the
+new per-source fingerprints can be stored.
+
+### Updating The Windows GUI
+
+This release changes the GUI index flow to use incremental embedded index
+updates and progress messages. To update the Windows GUI build:
+
+```powershell
+npm run deps:hub-gui
+npm run build:hub-gui:windows
+```
+
+Close any running `SpectrumHub.exe` before rebuilding because Windows locks the
+bundled runtime files while the app is open. To create the distributable
+installer after the executable build:
+
+```powershell
+winget install JRSoftware.InnoSetup
+npm run build:hub-gui-installer
+```
+
+The installer packages the rebuilt `dist/SpectrumHub/` folder, including the
+updated index layer, server batch endpoint, changed-only verification helper,
+and GUI incremental index workflow.
 
 Benchmark and dashboard commands remain in the legacy CLI until the
 corresponding ecosystem packages are moved under `packages/`.

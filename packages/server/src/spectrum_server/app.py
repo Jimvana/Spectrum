@@ -29,9 +29,11 @@ from spectrum_core import (
     inspect_pack,
     inspect_encrypted_header,
     is_encrypted_pack,
+    is_external_media_file,
     is_generated_path,
     unpack,
     verify_pack,
+    verify_pack_sources,
 )
 from spectrum_index import build_pack_index, search_pack
 
@@ -458,42 +460,183 @@ def _safe_source_path(value: str) -> str:
     return path.as_posix()
 
 
-def _upsert_pack_document(pack_path: Path, source_path: str, body: dict, *, passphrase: str | None = None) -> dict:
-    source = _safe_source_path(source_path)
+def _document_content_bytes(body: dict) -> bytes:
     if "content_bytes" in body:
-        raw_bytes = bytes(int(value) for value in body["content_bytes"])
-    elif "content" in body:
-        raw_bytes = str(body["content"]).encode("utf-8")
-    else:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "content or content_bytes is required")
+        return bytes(int(value) for value in body["content_bytes"])
+    if "content" in body:
+        return str(body["content"]).encode("utf-8")
+    raise ApiError(HTTPStatus.BAD_REQUEST, "content or content_bytes is required")
+
+
+def _external_reason(source_path: str) -> str:
+    if is_external_media_file(source_path):
+        return "media_extension"
+    return "externalized"
+
+
+def _external_entry_summary(pack_id: str, entry) -> dict:
+    return {
+        "source_path": entry.source,
+        "kind": entry.kind,
+        "storage_kind": "external_blob",
+        "external_reason": _external_reason(entry.source),
+        "original_size": entry.size_bytes,
+        "spec_size": 0,
+        "sidecar_path": entry.sidecar_path,
+        "sha256": entry.sha256,
+        "raw_url": _raw_url(pack_id, entry.source),
+    }
+
+
+def _file_summary_for_source(pack_path: Path, pack_id: str, source_path: str, *, passphrase: str | None = None) -> dict:
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        entry = opened.find_entry(source_path)
+        if entry is not None:
+            return {
+                "source_path": entry.source,
+                "kind": "encoded",
+                "storage_kind": "encoded",
+                "generated": is_generated_path(entry.source),
+                "original_size": entry.original_size,
+                "spec_size": entry.spec_size,
+                "metadata": entry.metadata or {},
+                "hydrate_url": _hydrate_url(pack_id, entry.source),
+                "raw_url": _raw_url(pack_id, entry.source),
+            }
+        external = next((item for item in opened.external_entries if item.source == source_path), None)
+        if external is not None:
+            row = _external_entry_summary(pack_id, external)
+            row["generated"] = is_generated_path(external.source)
+            return row
+    raise ApiError(HTTPStatus.NOT_FOUND, f"document not found: {source_path}")
+
+
+def _verify_mutation(
+    pack_path: Path,
+    source_paths: list[str],
+    *,
+    mode: str,
+    passphrase: str | None = None,
+) -> dict | None:
+    if mode == "none":
+        return None
+    if mode == "full":
+        return verify_pack(pack_path, passphrase=passphrase).to_dict()
+    if mode == "changed":
+        return verify_pack_sources(pack_path, source_paths, passphrase=passphrase).to_dict()
+    raise ApiError(HTTPStatus.BAD_REQUEST, "verify must be one of: full, changed, none")
+
+
+def _upsert_pack_document(
+    pack_path: Path,
+    pack_id: str,
+    source_path: str,
+    body: dict,
+    *,
+    passphrase: str | None = None,
+) -> dict:
+    source = _safe_source_path(source_path)
+    raw_bytes = _document_content_bytes(body)
 
     replace = bool(body.get("replace", True))
     rebuild_index = bool(body.get("rebuild_index", True))
+    verify_mode = str(body.get("verify") or "full")
     with tempfile.TemporaryDirectory(prefix="spectrum-server-upsert-") as tmp_name:
         tmp = Path(tmp_name)
         target = tmp / source
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw_bytes)
-        append_summary = append_to_pack(pack_path, tmp, replace=replace, include_all=True, passphrase=passphrase)
+        append_summary = append_to_pack(
+            pack_path,
+            tmp,
+            replace=replace,
+            include_all=True,
+            passphrase=passphrase,
+            preserve_index=rebuild_index,
+        )
     _DECODE_CACHE.invalidate(pack_path)
 
-    verify_report = verify_pack(pack_path, passphrase=passphrase).to_dict()
+    verify_report = _verify_mutation(pack_path, [source], mode=verify_mode, passphrase=passphrase)
     index_summary = None
     if rebuild_index:
-        result = build_pack_index(pack_path, embed=True, passphrase=passphrase)
+        result = build_pack_index(pack_path, embed=True, passphrase=passphrase, incremental=True)
         index_summary = {key: value for key, value in result.items() if key != "index"}
-    document = _decode_document(pack_path, source, passphrase=passphrase)
+    file_summary = _file_summary_for_source(pack_path, pack_id, source, passphrase=passphrase)
+    document = None
+    if file_summary["kind"] == "encoded":
+        document = _decode_document(pack_path, source, passphrase=passphrase)
     return {
         "path": str(pack_path),
         "source_path": source,
         "append": append_summary,
         "verify": verify_report,
         "index": index_summary,
+        "file": file_summary,
         "document": {
             key: value
             for key, value in document.items()
             if key != "content_bytes"
-        },
+        } if document is not None else None,
+    }
+
+
+def _batch_upsert_pack_documents(
+    pack_path: Path,
+    pack_id: str,
+    body: dict,
+    *,
+    passphrase: str | None = None,
+) -> dict:
+    documents = body.get("documents")
+    if not isinstance(documents, list) or not documents:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "documents must be a non-empty list")
+    replace = bool(body.get("replace", True))
+    rebuild_index = bool(body.get("rebuild_index", True))
+    verify_mode = str(body.get("verify") or "changed")
+    staged: list[tuple[str, bytes]] = []
+    seen: set[str] = set()
+    for document in documents:
+        if not isinstance(document, dict):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "each document must be an object")
+        source = _safe_source_path(str(document.get("source_path") or document.get("path") or ""))
+        if source in seen:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"duplicate source_path: {source}")
+        seen.add(source)
+        staged.append((source, _document_content_bytes(document)))
+
+    with tempfile.TemporaryDirectory(prefix="spectrum-server-batch-upsert-") as tmp_name:
+        tmp = Path(tmp_name)
+        for source, raw_bytes in staged:
+            target = tmp / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw_bytes)
+        append_summary = append_to_pack(
+            pack_path,
+            tmp,
+            replace=replace,
+            include_all=True,
+            passphrase=passphrase,
+            preserve_index=rebuild_index,
+        )
+    _DECODE_CACHE.invalidate(pack_path)
+
+    source_paths = [source for source, _ in staged]
+    verify_report = _verify_mutation(pack_path, source_paths, mode=verify_mode, passphrase=passphrase)
+    index_summary = None
+    if rebuild_index:
+        result = build_pack_index(pack_path, embed=True, passphrase=passphrase, incremental=True)
+        index_summary = {key: value for key, value in result.items() if key != "index"}
+    files = [
+        _file_summary_for_source(pack_path, pack_id, source, passphrase=passphrase)
+        for source in source_paths
+    ]
+    return {
+        "path": str(pack_path),
+        "append": append_summary,
+        "verify": verify_report,
+        "index": index_summary,
+        "files": files,
+        "documents": files,
     }
 
 
@@ -556,7 +699,10 @@ def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None =
         ) as target_zip:
             source_zip = opened._zip
             for item in source_zip.infolist():
-                if item.filename in {"manifest.json", removed_spec, "index.bin", trash_entry["spec"]}:
+                skip_members = {"manifest.json", removed_spec, trash_entry["spec"]}
+                if not rebuild_index:
+                    skip_members.add("index.bin")
+                if item.filename in skip_members:
                     continue
                 target_zip.writestr(item, source_zip.read(item.filename))
             target_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
@@ -582,7 +728,7 @@ def _delete_pack_document(pack_path: Path, source_path: str, body: dict | None =
     verify_report = verify_pack(pack_path, passphrase=passphrase).to_dict()
     index_summary = None
     if rebuild_index:
-        result = build_pack_index(pack_path, embed=True, passphrase=passphrase)
+        result = build_pack_index(pack_path, embed=True, passphrase=passphrase, incremental=True)
         index_summary = {key: value for key, value in result.items() if key != "index"}
     return {
         "path": str(pack_path),
@@ -602,6 +748,8 @@ def _document_summary(pack_id: str, entry) -> dict:
     return {
         "source_path": entry.source,
         "path": entry.spec,
+        "kind": "encoded",
+        "storage_kind": "encoded",
         "id": entry.source_id,
         "metadata": entry.metadata or {},
         "original_size": entry.original_size,
@@ -613,6 +761,7 @@ def _document_summary(pack_id: str, entry) -> dict:
 def _pack_manifest(pack_path: Path, pack_id: str, *, passphrase: str | None = None) -> dict:
     with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
         documents = [_document_summary(pack_id, entry) for entry in opened.entries]
+        external_entries = [_external_entry_summary(pack_id, entry) for entry in opened.external_entries]
         return {
             "id": pack_id,
             "pack_path": str(pack_path),
@@ -622,6 +771,7 @@ def _pack_manifest(pack_path: Path, pack_id: str, *, passphrase: str | None = No
             "source_root": opened.manifest.get("source_root"),
             "app": _pack_app_config(pack_path, passphrase=passphrase),
             "documents": documents,
+            "external_entries": external_entries,
         }
 
 
@@ -655,6 +805,7 @@ def _pack_files(
                 {
                     "source_path": entry.source,
                     "kind": "encoded",
+                    "storage_kind": "encoded",
                     "generated": generated,
                     "original_size": entry.original_size,
                     "spec_size": entry.spec_size,
@@ -669,18 +820,9 @@ def _pack_files(
             generated = is_generated_path(entry.source)
             if generated and not include_generated:
                 continue
-            rows.append(
-                {
-                    "source_path": entry.source,
-                    "kind": entry.kind,
-                    "generated": generated,
-                    "original_size": entry.size_bytes,
-                    "spec_size": 0,
-                    "sidecar_path": entry.sidecar_path,
-                    "sha256": entry.sha256,
-                    "raw_url": _raw_url(pack_id, entry.source),
-                }
-            )
+            row = _external_entry_summary(pack_id, entry)
+            row["generated"] = generated
+            rows.append(row)
         rows.sort(key=lambda row: str(row["source_path"]).lower())
         page = rows[cursor : cursor + limit]
         next_cursor = cursor + limit if cursor + limit < len(rows) else None
@@ -1442,7 +1584,27 @@ def create_handler(registry: PackRegistry | None = None):
                 source_path = str(body.get("source_path") or body.get("path") or "")
                 if not source_path:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "source_path is required")
-                return _upsert_pack_document(registry.get(parts[1]), source_path, body, passphrase=registry.passphrase(parts[1]))
+                return _upsert_pack_document(
+                    registry.get(parts[1]),
+                    parts[1],
+                    source_path,
+                    body,
+                    passphrase=registry.passphrase(parts[1]),
+                )
+
+            if (
+                len(parts) == 4
+                and parts[0] == "packs"
+                and parts[2] == "documents"
+                and parts[3] == "batch"
+                and method == "POST"
+            ):
+                return _batch_upsert_pack_documents(
+                    registry.get(parts[1]),
+                    parts[1],
+                    self._read_json(),
+                    passphrase=registry.passphrase(parts[1]),
+                )
 
             if len(parts) == 3 and parts[0] == "packs" and parts[2] == "verify" and method == "POST":
                 return verify_pack(registry.get(parts[1]), passphrase=registry.passphrase(parts[1])).to_dict()
@@ -1454,6 +1616,7 @@ def create_handler(registry: PackRegistry | None = None):
                     output_path=body.get("output_path"),
                     embed=bool(body.get("embed", True)),
                     passphrase=registry.passphrase(parts[1]),
+                    incremental=bool(body.get("incremental", True)),
                 )
                 return {key: value for key, value in result.items() if key != "index"}
 

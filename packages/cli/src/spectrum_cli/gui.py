@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import queue
 import os
+import platform
+import shutil
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -10,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import tkinter as tk
+from urllib.error import URLError
+from urllib.request import urlopen
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     for bundled_runtime in [
@@ -88,6 +93,22 @@ def asset_path(name: str) -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / ASSET_DIR / name
     return Path(__file__).resolve().parent / "assets" / name
+
+
+def open_local_path(path: Path) -> None:
+    resolved = path.expanduser().resolve()
+    system = platform.system().lower()
+    if system == "windows":
+        os.startfile(str(resolved))  # type: ignore[attr-defined]
+        return
+    if system == "darwin":
+        subprocess.run(["open", str(resolved)], check=False)
+        return
+    opener = "xdg-open"
+    if shutil.which(opener):  # type: ignore[name-defined]
+        subprocess.run([opener, str(resolved)], check=False)
+        return
+    webbrowser.open(resolved.as_uri())
 
 
 class SpectrumHubGui:
@@ -270,6 +291,22 @@ class SpectrumHubGui:
             return None
         return port
 
+    def _health_url(self, port: int) -> str:
+        return f"http://{HOST}:{port}/health"
+
+    def _project_url(self, port: int) -> str:
+        return f"http://{HOST}:{port}/project"
+
+    def _app_url(self, port: int) -> str:
+        return f"http://{HOST}:{port}/apps/repo/"
+
+    def _server_health_ok(self, port: int, *, timeout: float = 1.0) -> bool:
+        try:
+            with urlopen(self._health_url(port), timeout=timeout) as response:
+                return int(response.status) == 200
+        except (OSError, URLError):
+            return False
+
     def _passphrase_for_pack(self, pack: Path, *, prompt: bool = True) -> str | None:
         resolved = pack.expanduser().resolve()
         if not is_encrypted_pack(resolved):
@@ -442,9 +479,7 @@ class SpectrumHubGui:
     def _after_files_view_ready(self, folder: Path) -> None:
         self.append_status_var.set(f"Files view ready: {folder}")
         try:
-            os.startfile(str(folder))  # type: ignore[attr-defined]
-        except AttributeError:
-            webbrowser.open(folder.as_uri())
+            open_local_path(folder)
         except Exception as exc:
             messagebox.showerror("Spectrum Hub", f"Could not open files folder: {exc}")
 
@@ -577,6 +612,7 @@ class SpectrumHubGui:
                     include_generated=include_generated,
                     replace=replace,
                     passphrase=passphrase,
+                    preserve_index=rebuild_index,
                 )
                 appended += int(summary.get("appended_entries", 0))
                 replaced += int(summary.get("replaced_entries", 0))
@@ -593,9 +629,15 @@ class SpectrumHubGui:
                 raise RuntimeError("Pack append completed, but verification failed.")
             indexed_docs = None
             if rebuild_index:
-                self.status_queue.put(("append", "Rebuilding embedded search index..."))
+                self.status_queue.put(("append", "Updating embedded search index..."))
                 self.status_queue.put(("busy", "index"))
-                index = build_index(pack, embed=True, passphrase=passphrase)
+                index = build_index(
+                    pack,
+                    embed=True,
+                    passphrase=passphrase,
+                    incremental=True,
+                    progress_callback=lambda message: self.status_queue.put(("append", message)),
+                )
                 indexed_docs = int(index.get("documents", 0))
             self.status_queue.put(("progress", 100))
             self.root.after(0, self._after_append_success, appended, replaced, indexed_docs)
@@ -625,11 +667,29 @@ class SpectrumHubGui:
 
     def _rebuild_index_worker(self, pack: Path, passphrase: str | None) -> None:
         try:
-            self.status_queue.put(("append", "Rebuilding embedded search index..."))
+            self.status_queue.put(("append", "Updating embedded search index..."))
             self.status_queue.put(("busy", "index"))
-            index = build_index(pack, embed=True, passphrase=passphrase)
+            index = build_index(
+                pack,
+                embed=True,
+                passphrase=passphrase,
+                incremental=True,
+                progress_callback=lambda message: self.status_queue.put(("append", message)),
+            )
             self.status_queue.put(("progress", 100))
-            self.status_queue.put(("append", f"Search index rebuilt for {int(index.get('documents', 0))} documents."))
+            if index.get("incremental"):
+                stats = index.get("incremental_stats") or {}
+                self.status_queue.put(
+                    (
+                        "append",
+                        "Search index updated incrementally: "
+                        f"{int(stats.get('reindexed', 0))} reindexed, "
+                        f"{int(stats.get('kept', 0))} reused, "
+                        f"{int(index.get('documents', 0))} total.",
+                    )
+                )
+            else:
+                self.status_queue.put(("append", f"Search index rebuilt for {int(index.get('documents', 0))} documents."))
         except Exception as exc:
             self.status_queue.put(("append", f"Index rebuild failed: {exc}"))
             self.root.after(0, messagebox.showerror, "Spectrum Hub", str(exc))
@@ -642,7 +702,14 @@ class SpectrumHubGui:
         if port is None:
             return
         if self.server is not None:
-            self.server_var.set(f"Server already running at http://{HOST}:{port}/project")
+            url = self._project_url(port)
+            self.server_var.set(f"Server already running at {url}")
+            self.append_status_var.set(f"Server already running: {url}")
+            return
+        if self._server_health_ok(port):
+            url = self._project_url(port)
+            self.server_var.set(f"Server already running at {url}")
+            self.append_status_var.set(f"Detected an existing Spectrum server: {url}")
             return
         try:
             passphrase = self._passphrase_for_pack(pack)
@@ -657,12 +724,34 @@ class SpectrumHubGui:
         except Exception as exc:
             messagebox.showerror("Spectrum Hub", str(exc))
             self.server_var.set("Server failed to start")
+            self.append_status_var.set(f"Server failed to start: {exc}")
             return
 
         self.server = server
         self.server_thread = threading.Thread(target=self._serve_forever, daemon=True)
         self.server_thread.start()
-        self.server_var.set(f"Server running at http://{HOST}:{port}/project")
+        self.server_var.set("Starting server...")
+        self.append_status_var.set("Starting server...")
+        self.root.after(250, self._confirm_server_started, port)
+
+    def _confirm_server_started(self, port: int, attempts: int = 12) -> None:
+        if self.server is None:
+            return
+        if self._server_health_ok(port, timeout=0.5):
+            url = self._project_url(port)
+            self.server_var.set(f"Server running at {url}")
+            self.append_status_var.set(f"Server running: {url}")
+            return
+        if attempts > 0:
+            self.root.after(250, self._confirm_server_started, port, attempts - 1)
+            return
+        server = self.server
+        self.server = None
+        server.shutdown()
+        server.server_close()
+        self.server_var.set("Server failed health check")
+        self.append_status_var.set(f"Server did not respond at {self._health_url(port)}.")
+        messagebox.showerror("Spectrum Hub", f"Server started but did not respond at {self._health_url(port)}.")
 
     def _serve_forever(self) -> None:
         assert self.server is not None
@@ -684,12 +773,12 @@ class SpectrumHubGui:
     def open_dashboard(self) -> None:
         port = self._port()
         if port is not None:
-            webbrowser.open(f"http://{HOST}:{port}/project")
+            webbrowser.open(self._project_url(port))
 
     def open_app(self) -> None:
         port = self._port()
         if port is not None:
-            webbrowser.open(f"http://{HOST}:{port}/apps/repo/")
+            webbrowser.open(self._app_url(port))
 
     def close(self) -> None:
         self.stop_server()

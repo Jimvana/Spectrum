@@ -751,6 +751,7 @@ def append_to_pack(
     hint: str | None = None,
     externalize_media: bool = True,
     include_generated: bool = True,
+    preserve_index: bool = False,
 ) -> dict:
     """Append source files to an existing `.specpack`.
 
@@ -855,7 +856,7 @@ def append_to_pack(
             for item in source_archive.infolist():
                 if item.filename == "manifest.json":
                     continue
-                if item.filename == PACK_INDEX_NAME:
+                if item.filename == PACK_INDEX_NAME and not preserve_index:
                     continue
                 if item.filename in removed_specs:
                     continue
@@ -895,7 +896,8 @@ def append_to_pack(
     summary["replaced_entries"] = len(removed_specs) + len(removed_external)
     summary["replaced_encoded_entries"] = len(removed_specs)
     summary["replaced_external_entries"] = len(removed_external)
-    summary["dropped_embedded_index"] = PACK_INDEX_NAME in existing_members
+    summary["dropped_embedded_index"] = PACK_INDEX_NAME in existing_members and not preserve_index
+    summary["preserved_embedded_index"] = PACK_INDEX_NAME in existing_members and preserve_index
     return summary
 
 

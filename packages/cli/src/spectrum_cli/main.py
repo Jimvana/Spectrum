@@ -568,6 +568,7 @@ def command_index(args: argparse.Namespace) -> int:
         embed=args.embed,
         verbose=args.verbose,
         passphrase=_unlock_passphrase(args),
+        incremental=args.incremental,
     )
     payload = {key: value for key, value in result.items() if key != "index"}
     emit(payload, as_json=args.json)
@@ -745,7 +746,7 @@ def command_project_init(args: argparse.Namespace) -> int:
     verify_report = verify_pack(output, passphrase=passphrase).to_dict()
     index_summary = None
     if not args.no_index:
-        result = build_index(output, embed=True, verbose=args.verbose, passphrase=passphrase)
+        result = build_index(output, embed=True, verbose=args.verbose, passphrase=passphrase, incremental=True)
         index_summary = {key: value for key, value in result.items() if key != "index"}
 
     payload = {
@@ -792,11 +793,12 @@ def command_project_add(args: argparse.Namespace) -> int:
         replace=args.replace,
         verbose=args.verbose,
         passphrase=passphrase,
+        preserve_index=not args.no_index,
     )
     verify_report = verify_pack(args.pack, passphrase=passphrase).to_dict()
     index_summary = None
     if not args.no_index:
-        result = build_index(args.pack, embed=True, verbose=args.verbose, passphrase=passphrase)
+        result = build_index(args.pack, embed=True, verbose=args.verbose, passphrase=passphrase, incremental=True)
         index_summary = {key: value for key, value in result.items() if key != "index"}
     payload = {
         "pack": str(Path(args.pack).expanduser().resolve()),
@@ -1318,6 +1320,7 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("input")
     index.add_argument("-o", "--output", help="Output index path")
     index.add_argument("--embed", action="store_true", help="Embed index.bin into a .specpack")
+    index.add_argument("--incremental", action="store_true", help="Reuse unchanged documents from an embedded pack index when possible")
     index.add_argument("--unlock", action="store_true", help="Prompt to unlock an encrypted pack")
     index.add_argument("--verbose", action="store_true")
     index.add_argument("--json", action="store_true")

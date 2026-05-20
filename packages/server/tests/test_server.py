@@ -87,6 +87,7 @@ def test_server_pack_lifecycle(tmp_path: Path) -> None:
         assert manifest["id"] == "docs"
         assert manifest["documents"][0]["source_path"] == "note.md"
         assert manifest["documents"][0]["hydrate_url"] == "/packs/docs/documents/note.md"
+        assert manifest["external_entries"] == []
 
         status, documents = request(port, "GET", "/packs/docs/documents")
         assert status == 200
@@ -224,6 +225,10 @@ def test_server_files_endpoint_filters_generated_paths(tmp_path: Path) -> None:
         assert status == 200
         assert {item["source_path"] for item in files["files"]} == {"src/app.py", "src/logo.png"}
         assert files["files"][0]["raw_url"].startswith("/packs/repo/raw/")
+        by_path = {item["source_path"]: item for item in files["files"]}
+        assert by_path["src/app.py"]["storage_kind"] == "encoded"
+        assert by_path["src/logo.png"]["storage_kind"] == "external_blob"
+        assert by_path["src/logo.png"]["external_reason"] == "media_extension"
 
         status, all_files = request(port, "GET", "/packs/repo/files?include_generated=true")
         assert status == 200
@@ -440,6 +445,7 @@ def test_server_upserts_document_into_served_pack(tmp_path: Path) -> None:
         assert status == 200
         assert updated["verify"]["valid"]
         assert updated["document"]["path"] == ".spectrum-project/ops.json"
+        assert updated["file"]["storage_kind"] == "encoded"
 
         status, hydrated = request(port, "GET", "/packs/repo/documents/.spectrum-project/ops.json")
         assert status == 200
@@ -475,6 +481,73 @@ def test_server_upserts_document_into_served_pack(tmp_path: Path) -> None:
         records = [json.loads(line) for line in trash["content"].splitlines() if line]
         assert records[-1]["source_path"] == ".spectrum-project/ops.json"
         assert json.loads(records[-1]["content"])["sites"][0]["name"] == "example-site"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_server_batch_upserts_documents_verifies_changed_and_indexes_once(tmp_path: Path, monkeypatch) -> None:
+    docs = tmp_path / "project"
+    docs.mkdir()
+    (docs / "README.md").write_text("# Project\n\nOriginal pack.\n", encoding="utf-8")
+    pack_path = tmp_path / "project.specpack"
+    pack(docs, pack_path)
+
+    def fail_full_verify(*args, **kwargs):
+        raise AssertionError("full verify should not run for verify=changed")
+
+    monkeypatch.setattr(app_module, "verify_pack", fail_full_verify)
+
+    registry = PackRegistry()
+    registry.add("repo", pack_path)
+    server = SpectrumServer(("127.0.0.1", 0), create_handler(registry), quiet=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    image = b"\x89PNG\r\n\x1a\n" + bytes(range(24))
+    try:
+        status, updated = request(
+            port,
+            "POST",
+            "/packs/repo/documents/batch",
+            {
+                "replace": True,
+                "verify": "changed",
+                "rebuild_index": True,
+                "documents": [
+                    {"source_path": "README.md", "content": "# Project\n\nUpdated batch text.\n"},
+                    {"source_path": "notes/agent.md", "content": "Batch searchable marker.\n"},
+                    {"source_path": "assets/logo.png", "content_bytes": list(image)},
+                ],
+            },
+        )
+        assert status == 200
+        assert updated["append"]["appended_entries"] == 3
+        assert updated["verify"]["valid"]
+        assert updated["verify"]["chunks_checked"] == 3
+        assert updated["index"]["embedded"]
+        by_path = {item["source_path"]: item for item in updated["files"]}
+        assert by_path["README.md"]["storage_kind"] == "encoded"
+        assert by_path["notes/agent.md"]["storage_kind"] == "encoded"
+        assert by_path["assets/logo.png"]["storage_kind"] == "external_blob"
+
+        status, searched = request(port, "POST", "/packs/repo/search", {"query": "batch searchable marker", "top_k": 1})
+        assert status == 200
+        assert searched["results"][0]["source_path"] == "notes/agent.md"
+
+        status, manifest = request(port, "GET", "/packs/repo/manifest")
+        assert status == 200
+        assert {entry["source_path"] for entry in manifest["external_entries"]} == {"assets/logo.png"}
+
+        status, documents = request(port, "GET", "/packs/repo/documents")
+        assert status == 200
+        assert {entry["source_path"] for entry in documents["documents"]} == {"README.md", "notes/agent.md"}
+
+        status, _content_type, raw_image = bytes_request(port, "GET", "/packs/repo/raw/assets/logo.png")
+        assert status == 200
+        assert raw_image == image
     finally:
         server.shutdown()
         server.server_close()

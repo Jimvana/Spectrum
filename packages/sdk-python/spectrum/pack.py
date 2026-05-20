@@ -125,8 +125,8 @@ class SpectrumPack:
     def verify(self) -> dict:
         return verify_pack(self.path).to_dict()
 
-    def build_index(self, *, embed: bool = True, output_path: str | Path | None = None) -> dict:
-        result = build_pack_index(self.path, output_path=output_path, embed=embed)
+    def build_index(self, *, embed: bool = True, output_path: str | Path | None = None, incremental: bool = True) -> dict:
+        result = build_pack_index(self.path, output_path=output_path, embed=embed, incremental=incremental)
         return {key: value for key, value in result.items() if key != "index"}
 
     def search(self, query: str, *, top_k: int = 10, language: str | int = "txt") -> list[dict]:

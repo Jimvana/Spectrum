@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import spectrum_core._repo as _repo  # noqa: F401 - ensures repo modules are importable.
 from spectrum_core import (
@@ -19,6 +21,7 @@ from spectrum_core import (
     is_encrypted_pack,
     is_generated_path,
 )
+from rag.indexer import RETRIEVAL_PROFILE
 from rag.indexer import build_index as _build_spec_index
 from rag.indexer import index_directory, load_index as _load_index, save_index
 from rag.query import search as _search
@@ -69,6 +72,137 @@ def _extract_pack(pack_path: Path, tmp: Path, *, passphrase: str | None = None) 
     return tmp / "files"
 
 
+def _build_inverted_from_documents(documents: list[dict]) -> dict[str, list[int]]:
+    inverted: dict[int, list[int]] = {}
+    for doc in documents:
+        doc_id = int(doc["id"])
+        for tid, _count in doc["freq"]:
+            inverted.setdefault(int(tid), []).append(doc_id)
+    return {str(tid): doc_ids for tid, doc_ids in inverted.items()}
+
+
+def _finalize_documents(documents: list[dict]) -> dict:
+    total_tokens = 0
+    finalized = []
+    for doc_id, document in enumerate(documents):
+        doc = dict(document)
+        doc["id"] = doc_id
+        total_tokens += int(doc.get("token_count", 0))
+        finalized.append(doc)
+    avg_doc_length = total_tokens / len(finalized) if finalized else 0.0
+    return {
+        "meta": {
+            "total_docs": len(finalized),
+            "avg_doc_length": round(avg_doc_length, 2),
+            "built_at": datetime.now(timezone.utc).isoformat(),
+            "retrieval_profile": RETRIEVAL_PROFILE,
+            "pack_fingerprint_schema": "encoded_spec_sha256_v1",
+        },
+        "documents": finalized,
+        "inverted": _build_inverted_from_documents(finalized),
+    }
+
+
+def _pack_entry_fingerprints(pack_path: Path, *, passphrase: str | None = None) -> dict[str, dict[str, Any]]:
+    fingerprints: dict[str, dict[str, Any]] = {}
+    with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+        for entry in opened.entries:
+            spec_bytes = opened.read_spec(entry)
+            fingerprints[entry.source] = {
+                "source_path": entry.source,
+                "path": entry.spec,
+                "name": Path(entry.source).name,
+                "spec_sha256": hashlib.sha256(spec_bytes).hexdigest(),
+                "spec_size": entry.spec_size,
+                "orig_length": entry.original_size,
+            }
+    return fingerprints
+
+
+def _attach_pack_fingerprints(index: dict, fingerprints: dict[str, dict[str, Any]]) -> None:
+    for document in index.get("documents", []):
+        source = str(document.get("source_path") or "")
+        fingerprint = fingerprints.get(source)
+        if fingerprint:
+            document.update(fingerprint)
+            document["original_size"] = fingerprint["orig_length"]
+
+
+def _index_changed_entry(entry, fingerprint: dict[str, Any], tmp: Path, source_pack: SpectrumPack, *, verbose: bool) -> dict:
+    spec_path = source_pack.extract_spec(entry, tmp / "changed")
+    with _quiet(verbose):
+        changed_index = _build_spec_index([spec_path])
+    if not changed_index.get("documents"):
+        raise ValueError(f"changed entry did not produce an index document: {entry.source}")
+    document = dict(changed_index["documents"][0])
+    document.update(fingerprint)
+    document["original_size"] = fingerprint["orig_length"]
+    return document
+
+
+def _incremental_pack_index(
+    pack_path: Path,
+    old_index: dict,
+    fingerprints: dict[str, dict[str, Any]],
+    tmp: Path,
+    *,
+    verbose: bool,
+    passphrase: str | None = None,
+    progress_message: Callable[[str], None],
+) -> tuple[dict, dict[str, int]]:
+    old_by_source = {
+        str(document.get("source_path")): document
+        for document in old_index.get("documents", [])
+        if document.get("source_path") and document.get("spec_sha256")
+    }
+    if len(old_by_source) != len(old_index.get("documents", [])):
+        raise ValueError("embedded index does not contain pack fingerprints")
+
+    added = []
+    changed = []
+    kept = []
+    for source, fingerprint in fingerprints.items():
+        old_doc = old_by_source.get(source)
+        if old_doc is None:
+            added.append(source)
+        elif old_doc.get("spec_sha256") != fingerprint["spec_sha256"]:
+            changed.append(source)
+        else:
+            doc = dict(old_doc)
+            doc.update(fingerprint)
+            kept.append(doc)
+    deleted = sorted(set(old_by_source) - set(fingerprints))
+    changed_sources = sorted([*added, *changed])
+    progress_message(
+        f"incremental diff: kept {len(kept)}, added {len(added)}, changed {len(changed)}, deleted {len(deleted)}"
+    )
+
+    kept_count = len(kept)
+    new_documents = list(kept)
+    if changed_sources:
+        with SpectrumPack.open(pack_path, passphrase=passphrase) as opened:
+            entries_by_source = {entry.source: entry for entry in opened.entries}
+            for source in changed_sources:
+                progress_message(f"indexing changed source {source}")
+                new_documents.append(
+                    _index_changed_entry(
+                        entries_by_source[source],
+                        fingerprints[source],
+                        tmp,
+                        opened,
+                        verbose=verbose,
+                    )
+                )
+    new_documents.sort(key=lambda document: str(document.get("source_path") or document.get("path") or "").lower())
+    return _finalize_documents(new_documents), {
+        "kept": kept_count,
+        "added": len(added),
+        "changed": len(changed),
+        "deleted": len(deleted),
+        "reindexed": len(changed_sources),
+    }
+
+
 def _apply_pack_manifest_paths(index: dict, pack_root: Path) -> None:
     manifest_path = pack_root / "manifest.json"
     if not manifest_path.exists():
@@ -113,6 +247,7 @@ def build_index(
     embed: bool = False,
     verbose: bool = False,
     passphrase: str | None = None,
+    incremental: bool = False,
 ) -> dict[str, Any]:
     """Build a retrieval index for a `.spec`, `.spec` directory, or `.specpack`."""
     path = Path(target).expanduser().resolve()
@@ -120,7 +255,14 @@ def build_index(
         raise FileNotFoundError(path)
 
     if path.suffix.lower() == ".specpack":
-        return build_pack_index(path, output_path=output_path, embed=embed, verbose=verbose, passphrase=passphrase)
+        return build_pack_index(
+            path,
+            output_path=output_path,
+            embed=embed,
+            verbose=verbose,
+            passphrase=passphrase,
+            incremental=incremental,
+        )
 
     with _quiet(verbose):
         if path.is_file():
@@ -148,23 +290,70 @@ def build_pack_index(
     embed: bool = False,
     verbose: bool = False,
     passphrase: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+    incremental: bool = False,
 ) -> dict[str, Any]:
     """Build an index for a `.specpack`, optionally embedding it as `index.bin`."""
     pack = Path(pack_path).expanduser().resolve()
     if not pack.exists():
         raise FileNotFoundError(pack)
 
+    progress: list[str] = []
+
+    def progress_message(message: str) -> None:
+        progress.append(message)
+        if progress_callback is not None:
+            progress_callback(message)
+        if verbose:
+            print(f"[spectrum-index] {message}")
+
+    incremental_stats: dict[str, int] | None = None
+    used_incremental = False
     with tempfile.TemporaryDirectory(prefix="spectrum-index-pack-") as tmp_name:
         tmp = Path(tmp_name)
-        files_dir = _extract_pack(pack, tmp, passphrase=passphrase)
-        with _quiet(verbose):
-            index = index_directory(files_dir)
-        _apply_pack_manifest_paths(index, tmp)
+        progress_message("fingerprinting pack specs")
+        fingerprints = _pack_entry_fingerprints(pack, passphrase=passphrase)
+        progress_message(f"fingerprinted {len(fingerprints)} specs")
+        index = None
+        if incremental:
+            progress_message("loading embedded index for incremental rebuild")
+            try:
+                old_index = _load_embedded_pack_index(pack, passphrase=passphrase)
+                if old_index is None:
+                    raise FileNotFoundError(f"no embedded {PACK_INDEX_NAME} in {pack}")
+                index, incremental_stats = _incremental_pack_index(
+                    pack,
+                    old_index,
+                    fingerprints,
+                    tmp,
+                    verbose=verbose,
+                    passphrase=passphrase,
+                    progress_message=progress_message,
+                )
+                used_incremental = True
+                progress_message(f"incrementally indexed {incremental_stats['reindexed']} changed documents")
+            except Exception as exc:
+                progress_message(f"incremental rebuild unavailable: {exc}; falling back to full rebuild")
+        if index is None:
+            progress_message("extracting pack specs")
+            files_dir = _extract_pack(pack, tmp, passphrase=passphrase)
+            spec_count = sum(1 for _ in files_dir.rglob("*.spec"))
+            progress_message(f"extracted {spec_count} specs")
+            with _quiet(verbose):
+                progress_message("building retrieval index")
+                index = index_directory(files_dir)
+            progress_message(f"indexed {index['meta']['total_docs']} documents")
+            _apply_pack_manifest_paths(index, tmp)
+            _attach_pack_fingerprints(index, fingerprints)
         index_path = Path(output_path).expanduser().resolve() if output_path else tmp / PACK_INDEX_NAME
         with _quiet(verbose):
+            progress_message("saving index")
             save_index(index, index_path)
+        progress_message(f"saved index to {index_path}")
         if embed:
+            progress_message("embedding index in pack")
             _replace_zip_member(pack, index_path, PACK_INDEX_NAME, passphrase=passphrase)
+            progress_message("embedded index in pack")
             final_path = f"{pack}#{PACK_INDEX_NAME}"
         elif output_path is not None:
             final_path = str(index_path)
@@ -177,6 +366,9 @@ def build_pack_index(
         "embedded": embed,
         "documents": index["meta"]["total_docs"],
         "tokens": len(index["inverted"]),
+        "incremental": used_incremental,
+        "incremental_stats": incremental_stats,
+        "progress": progress,
         "index": index,
     }
 

@@ -21,6 +21,7 @@ from spectrum_core import (
     pack,
     unpack,
     verify_pack,
+    verify_pack_sources,
     verify_spec,
 )
 
@@ -324,6 +325,52 @@ def test_append_to_pack_externalizes_media_sidecar(tmp_path: Path) -> None:
     assert report.valid
     assert (tmp_path / "docs.media" / "restore_media.json").exists()
     assert (decoded_dir / "media" / "clip.mp4").read_bytes() == video_bytes
+
+
+def test_verify_pack_sources_checks_changed_encoded_and_external_entries(tmp_path: Path) -> None:
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    (source_dir / "README.md").write_text("# Demo\n", encoding="utf-8")
+    pack_path = tmp_path / "docs.specpack"
+    pack(source_dir, pack_path)
+
+    append_dir = tmp_path / "append"
+    (append_dir / "notes").mkdir(parents=True)
+    (append_dir / "assets").mkdir()
+    (append_dir / "notes" / "agent.md").write_text("Changed-only verifier.\n", encoding="utf-8")
+    image_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(16))
+    (append_dir / "assets" / "logo.png").write_bytes(image_bytes)
+
+    append_to_pack(pack_path, append_dir, include_all=True)
+
+    report = verify_pack_sources(pack_path, {"notes/agent.md", "assets/logo.png"})
+
+    assert report.valid
+    assert report.chunks_checked == 2
+    assert report.decode_passed == 1
+    assert report.decode_failed == 0
+
+
+def test_verify_pack_sources_reports_corrupt_external_blob(tmp_path: Path) -> None:
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    (source_dir / "README.md").write_text("# Demo\n", encoding="utf-8")
+    image_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(16))
+    (source_dir / "logo.png").write_bytes(image_bytes)
+    pack_path = tmp_path / "docs.specpack"
+    pack(source_dir, pack_path, include_all=True)
+
+    with SpectrumPack.open(pack_path) as opened:
+        external = opened.external_entries[0]
+        blob = opened.external_blob_path(external)
+    blob.write_bytes(b"corrupt")
+
+    report = verify_pack_sources(pack_path, {"logo.png"})
+
+    assert not report.valid
+    assert report.chunks_checked == 1
+    assert report.decode_failed == 1
+    assert report.failures == ("logo.png: size mismatch",)
 
 
 def test_append_to_pack_rejects_conflicts_unless_replace(tmp_path: Path) -> None:

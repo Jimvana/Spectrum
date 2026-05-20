@@ -55,6 +55,9 @@ results/
 output_images/
 spec compressed/
 archive/
+!archive/
+!archive/site/
+!archive/site/**
 *.spec
 *.specpack
 *.tgz
